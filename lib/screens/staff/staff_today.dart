@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:firebase_auth/firebase_auth.dart';
 import '../client/reschedule_page.dart';
 import '../../services/open_link.dart';
 import 'ricetta_info.dart';
@@ -19,11 +22,61 @@ class StaffToday extends StatefulWidget {
 
 class _StaffTodayState extends State<StaffToday> {
   bool _busy = false;
+  bool _statusLoading = true;
+  bool _serverConnected = false;
+  String? _connectedEmail;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshStatus();
+  }
+
+  Future<String?> _idToken() async => FirebaseAuth.instance.currentUser?.getIdToken();
+
+  Future<void> _refreshStatus() async {
+    try {
+      final token = await _idToken();
+      if (token == null) return;
+      final r = await http.get(Uri.base.resolve('/api/gcal-status'),
+        headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 15));
+      if (r.statusCode == 200 && mounted) {
+        final j = jsonDecode(r.body) as Map<String, dynamic>;
+        setState(() {
+          _serverConnected = j['connected'] == true;
+          _connectedEmail = j['email'] as String?;
+          _statusLoading = false;
+        });
+        return;
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _statusLoading = false);
+  }
 
   Future<void> _connect() async {
     setState(() => _busy = true);
     try {
-      await googleCalendar.connect();
+      final token = await _idToken();
+      if (token == null) throw StateError('non autenticato');
+      final r = await http.post(Uri.base.resolve('/api/gcal-oauth-start'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'}).timeout(const Duration(seconds: 20));
+      if (r.statusCode != 200) {
+        throw StateError('HTTP ${r.statusCode}');
+      }
+      final url = (jsonDecode(r.body) as Map)['url'] as String?;
+      if (url == null || url.isEmpty) throw StateError('url assente');
+      openExternal(url);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Completa il consenso Google con l\'account della farmacia, poi torna qui.')));
+      }
+      // Dopo il consenso il callback allinea da solo le prenotazioni; ricontrollo lo stato.
+      for (var i = 0; i < 8; i++) {
+        await Future<void>.delayed(const Duration(seconds: 5));
+        if (!mounted) return;
+        await _refreshStatus();
+        if (_serverConnected) break;
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Collegamento non riuscito: $e')));
     }
@@ -31,24 +84,30 @@ class _StaffTodayState extends State<StaffToday> {
   }
 
   Widget _calendarBanner() {
-    final ok = googleCalendar.isConnected;
+    final ok = _serverConnected;
+    final admin = widget.employee.isAdmin;
+    final text = _statusLoading
+        ? 'Verifico il collegamento a Google Calendar…'
+        : ok
+            ? 'Google Calendar collegato come ${_connectedEmail ?? 'account farmacia'}: le prenotazioni si sincronizzano da sole.'
+            : admin
+                ? 'Google Calendar non collegato. Premi il pulsante e accedi con farmaciasanciro.servizi@gmail.com.'
+                : 'Google Calendar non collegato. Chiedi a un amministratore di collegarlo una volta sola.';
     return Card(
       color: ok ? Colors.green.shade50 : Colors.orange.shade50,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Icon(ok ? Icons.check_circle : Icons.warning_amber, color: ok ? Colors.green : Colors.orange),
-          Text(ok ? 'Google Calendar collegato: conferme/annulli sincronizzati' : 'Calendar non collegato: prenotazioni salvate in app, non nel calendario',
-              style: const TextStyle(fontSize: 16)),
-          SizedBox(
+          ConstrainedBox(constraints: const BoxConstraints(maxWidth: 640), child: Text(text, style: const TextStyle(fontSize: 16))),
+          if (admin) SizedBox(
             height: 52,
-            child: ok
-                ? OutlinedButton(onPressed: () => setState(googleCalendar.disconnect), child: const Text('Scollega'))
-                : FilledButton.icon(
-                    onPressed: _busy ? null : _connect,
-                    icon: const Icon(Icons.calendar_month),
-                    label: const Text('Collega Google Calendar', style: TextStyle(fontSize: 16))),
+            child: FilledButton.icon(
+                onPressed: _busy ? null : _connect,
+                icon: const Icon(Icons.calendar_month),
+                label: Text(ok ? 'Ricollega Google Calendar' : 'Collega Google Calendar', style: const TextStyle(fontSize: 16))),
           ),
+          if (admin || ok) TextButton(onPressed: _statusLoading ? null : _refreshStatus, child: const Text('Aggiorna stato')),
         ]),
       ),
     );

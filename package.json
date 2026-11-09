@@ -6,7 +6,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test netlify/functions/_shared/codice_fiscale.test.mjs netlify/functions/_shared/confirmation.test.mjs netlify/functions/_shared/account_contact.test.mjs netlify/functions/_shared/assignment.test.mjs"
+    "test": "node --test netlify/functions/_shared/codice_fiscale.test.mjs netlify/functions/_shared/confirmation.test.mjs netlify/functions/_shared/account_contact.test.mjs netlify/functions/_shared/assignment.test.mjs netlify/functions/_shared/gcal.test.mjs"
   },
   "dependencies": {
     "firebase-admin": "^13.6.0"

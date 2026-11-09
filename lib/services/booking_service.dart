@@ -18,8 +18,8 @@ import 'google_calendar_service.dart';
 /// Prenotazioni su Firestore. Due stanze fisse (1 e 2): overlap solo sulla stessa stanza.
 /// `roomDays/{yyyy-mm-dd}` contiene blocks con roomId; una prenotazione occupa UNA sola stanza.
 /// Se il servizio ammette entrambe, si sceglie la prima libera (preferenza 1 poi 2).
-/// Calendar: sincronizzato solo se nella sessione corrente lo staff ha collegato Google
-/// (niente Cloud Functions sul piano Spark).
+/// Calendar: sincronizzato lato server (`/api/gcal-sync`) dopo ogni scrittura.
+/// Non dipende dal token Google nel browser.
 class _DeviceBusyInTx implements Exception {}
 
 class BookingService extends ChangeNotifier {
@@ -874,12 +874,7 @@ class BookingService extends ChangeNotifier {
         throw await _deviceUnavailable(service, start, excludeId: a.id);
       }
     }
-    if (calendar.isConnected) {
-      try {
-        final ev = await calendar.createEvent(a);
-        await ref.update({'calendarEventId': ev});
-      } catch (_) {}
-    }
+    unawaited(_syncCalendar(a.id));
     if ((a.employeeId ?? '').isNotEmpty) unawaited(_notifyAssignment(a.id));
     notifyListeners();
     return a;
@@ -898,14 +893,23 @@ class BookingService extends ChangeNotifier {
     } catch (e) { debugPrint('Notifica assegnazione non disponibile: ${e.runtimeType}'); }
   }
 
+  /// Best effort: non blocca la prenotazione se Google Calendar non è (ancora) collegato.
+  Future<void> _syncCalendar(String appointmentId) async {
+    try {
+      final token = await _auth.currentUser?.getIdToken();
+      if (token == null) return;
+      final response = await http.post(Uri.base.resolve('/api/gcal-sync'),
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+        body: jsonEncode({'appointmentId': appointmentId})).timeout(const Duration(seconds: 20));
+      if (response.statusCode >= 400) debugPrint('Google Calendar sync: HTTP ${response.statusCode}');
+    } catch (e) { debugPrint('Google Calendar sync non disponibile: ${e.runtimeType}'); }
+  }
+
   Future<void> confirm(Appointment a) async {
     final upd = <String, dynamic>{'status': AppointmentStatus.confermato.name, 'updatedBy': _auth.currentUser?.uid};
-    // Crea o aggiorna anche gli eventi precedenti: allinea persona e orario.
-    if (calendar.isConnected) {
-      try { upd['calendarEventId'] = await calendar.syncEvent(a, a.calendarEventId); } catch (_) {}
-    }
     await _appts.doc(a.id).update(upd);
     await _setBlockStatus(a, AppointmentStatus.confermato.name);
+    unawaited(_syncCalendar(a.id));
   }
 
   Future<bool> _isActiveStaff() async {
@@ -942,9 +946,7 @@ class BookingService extends ChangeNotifier {
     await _appts.doc(a.id).update(upd);
     await _setBlockStatus(a, AppointmentStatus.annullato.name);
     await _setDeviceHoldStatus(a, AppointmentStatus.annullato.name);
-    if (a.calendarEventId != null && calendar.isConnected) {
-      try { await calendar.deleteEvent(a.calendarEventId!); } catch (_) {}
-    }
+    unawaited(_syncCalendar(a.id));
     if (needsRefund) {
       try {
         await _db.doc('notifications/rimborso_${a.id}').set({
@@ -1056,13 +1058,7 @@ class BookingService extends ChangeNotifier {
       } catch (_) {}
     }
     if (empId != a.employeeId) unawaited(_notifyAssignment(a.id));
-    if (calendar.isConnected) {
-      try {
-        final tmp = Appointment(id: a.id, service: service, start: start, end: end, customerName: a.customerName, phone: a.phone, email: a.email, status: a.status, codiceFiscale: a.codiceFiscale, roomId: roomId, employeeId: empId, employeeNome: empNome);
-        final ev = await calendar.syncEvent(tmp, a.calendarEventId);
-        await _appts.doc(a.id).update({'calendarEventId': ev});
-      } catch (e) { debugPrint('Google Calendar sync non riuscito: ${e.runtimeType}'); }
-    }
+    unawaited(_syncCalendar(a.id));
     notifyListeners();
     return a;
   }
@@ -1374,13 +1370,7 @@ class BookingService extends ChangeNotifier {
     }
 
     var calendarEventId = a.calendarEventId;
-    if ((scheduleChanged || personChanged) && calendar.isConnected && a.blocksRoom) {
-      try {
-        final tmp = Appointment(id: a.id, service: service, start: start, end: end, customerName: nome, phone: tel, email: mail, status: a.status, codiceFiscale: cf, roomId: roomId, employeeId: empId, employeeNome: empNome);
-        calendarEventId = await calendar.syncEvent(tmp, calendarEventId);
-        await _appts.doc(a.id).update({'calendarEventId': calendarEventId});
-      } catch (e) { debugPrint('Google Calendar sync non riuscito: ${e.runtimeType}'); }
-    }
+    if (scheduleChanged || personChanged) unawaited(_syncCalendar(a.id));
     if (personChanged) unawaited(_notifyAssignment(a.id));
 
     notifyListeners();

@@ -7,6 +7,9 @@ service cloud.firestore {
     function isAdmin() { return isEmployee() && get(/databases/$(db)/documents/employees/$(request.auth.uid)).data.ruolo == 'admin'; }
 
     // Catalogo e orari: lettura pubblica (home cliente senza race sull'auth anonima)
+    // Segreti server (refresh token Google Calendar): nessuno accesso client.
+    match /serverSecrets/{document=**} { allow read, write: if false; }
+
     match /settings/{id} { allow read: if true; allow write: if isAdmin(); }
     match /availability/{id} { allow read: if true; allow write: if isAdmin(); }
     match /rooms/{id} { allow read: if true; allow write: if isAdmin(); }
