@@ -5,6 +5,7 @@ import '../../services/booking_service.dart';
 import '../../models/service_type.dart';
 import '../../widgets/device_unavailable_dialog.dart';
 import 'booking_confirm.dart';
+import '../../widgets/slot_times.dart';
 import 'client_account_bar.dart';
 
 String hhmm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
@@ -220,23 +221,18 @@ class _SlotPickerState extends State<SlotPicker> {
                       }
                       return const Center(child: Text('Nessuno slot libero in questo giorno'));
                     }
-                    return GridView.count(
-                      crossAxisCount: 4,
-                      padding: const EdgeInsets.all(8),
-                      childAspectRatio: widget.fromStaff ? 1.4 : 2,
-                      children: [
-                        for (final t in slots)
-                          Padding(
-                            padding: const EdgeInsets.all(4),
-                            child: OutlinedButton(
-                              onPressed: () => widget.fromStaff ? _openStaffSlot(t) : Navigator.push(context, MaterialPageRoute(builder: (_) => BookingConfirm(service: widget.service, start: t, fromStaff: widget.fromStaff))),
-                              child: !widget.fromStaff || (_free[t] ?? const []).isEmpty ? Text(hhmm(t)) : Column(mainAxisSize: MainAxisSize.min, children: [
-                                Text(hhmm(t)),
-                                FittedBox(fit: BoxFit.scaleDown, child: Text(_free[t]!.map((p) => p.$2.split(' ').first).join(', '), style: const TextStyle(fontSize: 10, color: Colors.black54))),
-                              ]),
-                            ),
-                          ),
-                      ],
+                    return SlotTimes(
+                      slots: slots,
+                      subtitleOf: widget.fromStaff
+                          ? (t) {
+                              final people = _free[t] ?? const [];
+                              if (people.isEmpty) return null;
+                              return people.map((p) => p.$2.split(' ').first).join(', ');
+                            }
+                          : null,
+                      onSelected: (t) => widget.fromStaff
+                          ? _openStaffSlot(t)
+                          : Navigator.push(context, MaterialPageRoute(builder: (_) => BookingConfirm(service: widget.service, start: t, fromStaff: widget.fromStaff))),
                     );
                   },
                 );

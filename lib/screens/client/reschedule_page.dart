@@ -5,6 +5,7 @@ import '../../models/device.dart';
 import '../../widgets/device_unavailable_dialog.dart';
 import '../../theme/brand.dart';
 import 'slot_picker.dart' show hhmm;
+import '../../widgets/slot_times.dart';
 
 bool _sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
 const _wd = ['lun', 'mar', 'mer', 'gio', 'ven', 'sab', 'dom'];
@@ -141,17 +142,10 @@ class _ReschedulePageState extends State<ReschedulePage> {
                             if (!snap.hasData) return const Center(child: CircularProgressIndicator());
                             final slots = snap.data!.where((t) => t != a.start && t.isAfter(DateTime.now())).toList();
                             if (slots.isEmpty) return const Center(child: Text('Nessuno slot libero in questo giorno'));
-                            return GridView.count(
-                              crossAxisCount: 4,
-                              padding: const EdgeInsets.all(8),
-                              childAspectRatio: 2,
-                              children: [
-                                for (final t in slots)
-                                  Padding(
-                                    padding: const EdgeInsets.all(4),
-                                    child: OutlinedButton(onPressed: saving ? null : () => _pick(t), child: Text(hhmm(t))),
-                                  ),
-                              ],
+                            return SlotTimes(
+                              slots: slots,
+                              enabled: !saving,
+                              onSelected: _pick,
                             );
                           },
                         ),
