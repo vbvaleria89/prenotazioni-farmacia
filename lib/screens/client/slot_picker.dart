@@ -6,11 +6,10 @@ import '../../models/service_type.dart';
 import '../../widgets/device_unavailable_dialog.dart';
 import 'booking_confirm.dart';
 import '../../widgets/slot_times.dart';
+import '../../widgets/day_strip.dart';
 import 'client_account_bar.dart';
 
 String hhmm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-
-bool _sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
 
 class SlotPicker extends StatefulWidget {
   final ServiceType service;
@@ -53,9 +52,8 @@ class _SlotPickerState extends State<SlotPicker> {
         final t0 = DateTime(t.year, t.month, t.day);
         shown = List.generate(45, (i) => DateTime(t0.year, t0.month, t0.day + i));
         selected ??= t0;
-      } else if (selected != null) {
-        final i = forService.indexWhere((d) => _sameDay(d, selected!));
-        shown = forService.skip(i < 0 ? 0 : i).take(21).toList();
+      } else {
+        shown = forService;
       }
       if (!mounted) return;
       setState(() {
@@ -173,19 +171,11 @@ class _SlotPickerState extends State<SlotPicker> {
             ),
           )
         else ...[
-          SizedBox(
-            height: 60,
-            child: ListView(scrollDirection: Axis.horizontal, children: [
-              for (final d in days)
-                Padding(
-                  padding: const EdgeInsets.all(6),
-                  child: ChoiceChip(
-                    label: Text(_chipLabel(d)),
-                    selected: day != null && _sameDay(d, day!),
-                    onSelected: (_) => setState(() => day = d),
-                  ),
-                ),
-            ]),
+          DayStrip(
+            days: days,
+            selected: day,
+            onSelected: (d) => setState(() => day = d),
+            labelOf: _chipLabel,
           ),
           Expanded(
             child: ListenableBuilder(

@@ -6,9 +6,9 @@ import '../../widgets/device_unavailable_dialog.dart';
 import '../../theme/brand.dart';
 import 'slot_picker.dart' show hhmm;
 import '../../widgets/slot_times.dart';
+import '../../widgets/day_strip.dart';
 
 bool _sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
-const _wd = ['lun', 'mar', 'mer', 'gio', 'ven', 'sab', 'dom'];
 
 Future<void> showRescheduleBlocked(BuildContext context) => showDialog<void>(
       context: context,
@@ -54,7 +54,7 @@ class _ReschedulePageState extends State<ReschedulePage> {
   Future<void> _boot() async {
     try {
       final all = await bookingService.daysWithAvailability(daysAhead: 60);
-      final ds = [for (final d in all) if (a.service.availableOn(d.weekday)) d].take(30).toList();
+      final ds = [for (final d in all) if (a.service.availableOn(d.weekday)) d];
       if (!mounted) return;
       setState(() {
         days = ds;
@@ -117,19 +117,10 @@ class _ReschedulePageState extends State<ReschedulePage> {
               if (days.isEmpty)
                 const Expanded(child: Center(child: Text('Nessuna disponibilità nei prossimi giorni. Contatta la farmacia.')))
               else ...[
-                SizedBox(
-                  height: 60,
-                  child: ListView(scrollDirection: Axis.horizontal, children: [
-                    for (final d in days)
-                      Padding(
-                        padding: const EdgeInsets.all(6),
-                        child: ChoiceChip(
-                          label: Text('${_wd[d.weekday - 1]} ${d.day}/${d.month}'),
-                          selected: day != null && _sameDay(d, day!),
-                          onSelected: (_) => setState(() => day = d),
-                        ),
-                      ),
-                  ]),
+                DayStrip(
+                  days: days,
+                  selected: day,
+                  onSelected: (d) => setState(() => day = d),
                 ),
                 Expanded(
                   child: day == null
