@@ -1,7 +1,7 @@
 // Bridge Google Calendar (GIS token client) per Flutter web. Nessun secret qui.
 (function(){
   const CLIENT_ID='444833221252-pivii37uqhrshlhtfq4a5i83kl5efef7.apps.googleusercontent.com';
-  const CAL_ID='43dfc90185e070f4776e65524a62a6ddaf31d3c1c3b4c046743f82430f3c655e@group.calendar.google.com';
+  const CAL_ID='1194e4eb297f05196e148f42f5d52c08dd3932255c83ecf81926548f008f9b99@group.calendar.google.com';
   const SCOPE='https://www.googleapis.com/auth/calendar';
   const API='https://www.googleapis.com/calendar/v3';
   let tc=null;

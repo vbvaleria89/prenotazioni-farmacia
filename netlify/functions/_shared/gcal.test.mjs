@@ -205,6 +205,31 @@ test('gcal-sync: annullata elimina l\'evento', async () => {
   assert.ok(f.calls.some((c) => c.method === 'DELETE'));
 });
 
+test('gcal-sync: annullata senza evento non conta come rimossa', async () => {
+  const f = fixture({ appt: {
+    createdBy: 'staff1', status: 'annullato',
+    servizioNome: 'ECG', roomId: 1, start: new Date(), end: new Date(),
+  } });
+  const r = await handleGcalSync(request('/api/gcal-sync', { token: 'ok', body: { appointmentId: id } }), f.deps);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).action, 'skipped');
+  assert.equal(f.calls.filter((c) => String(c.url).includes('calendar')).length, 0);
+});
+
+test('gcal-reconcile: annullate senza evento vanno in skipped, non deleted', async () => {
+  const f = fixture({ appt: {
+    createdBy: 'staff1', status: 'annullato',
+    servizioNome: 'ECG', roomId: 1, start: new Date(), end: new Date(),
+  } });
+  const r = await handleGcalReconcile(request('/api/gcal-reconcile', { method: 'GET', cron: 'cron-s' }), f.deps);
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.skipped, 1);
+  assert.equal(body.deleted, 0);
+  assert.equal(body.created, 0);
+  assert.equal(body.failed, 0);
+});
+
 test('gcal-sync: 503 se Calendar non collegato', async () => {
   const f = fixture({ connected: false });
   assert.equal((await handleGcalSync(request('/api/gcal-sync', { token: 'ok', body: { appointmentId: id } }), f.deps)).status, 503);

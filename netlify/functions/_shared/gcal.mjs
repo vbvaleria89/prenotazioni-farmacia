@@ -7,7 +7,7 @@ import { FieldValue, getFirestore, initializeFirestore } from 'firebase-admin/fi
 import { isAppointmentId, loadServiceAccount, normalizeEmail, plain, readEnv } from './confirmation.mjs';
 
 export const DEFAULT_CALENDAR_ID =
-  '43dfc90185e070f4776e65524a62a6ddaf31d3c1c3b4c046743f82430f3c655e@group.calendar.google.com';
+  '1194e4eb297f05196e148f42f5d52c08dd3932255c83ecf81926548f008f9b99@group.calendar.google.com';
 export const DEFAULT_CLIENT_ID =
   '444833221252-pivii37uqhrshlhtfq4a5i83kl5efef7.apps.googleusercontent.com';
 export const DEFAULT_EXPECTED_EMAIL = 'farmaciasanciro.servizi@gmail.com';
@@ -133,6 +133,15 @@ function bearer(req) {
   return req.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1] || '';
 }
 
+function googleHttpError(result) {
+  const errBody = result?.body?.error || {};
+  const err = new Error(`http_${result.status}`);
+  err.status = result.status;
+  err.reason = errBody.errors?.[0]?.reason || errBody.status || null;
+  err.googleMessage = errBody.message || null;
+  return err;
+}
+
 async function calendarFetch(accessToken, method, path, body, fetchImpl) {
   const r = await fetchImpl(CALENDAR_API + path, {
     method,
@@ -204,16 +213,12 @@ export async function upsertCalendarEvent({ data, id, eventId, accessToken, cale
     const patched = await calendarFetch(accessToken, 'PATCH', `${path}/${encodeURIComponent(eventId)}`, body, fetchImpl);
     if (patched.ok && patched.body?.id) return patched.body.id;
     if (patched.status !== 404 && patched.status !== 410) {
-      const err = new Error(`http_${patched.status}`);
-      err.status = patched.status;
-      throw err;
+      throw googleHttpError(patched);
     }
   }
   const created = await calendarFetch(accessToken, 'POST', path, body, fetchImpl);
   if (!created.ok || !created.body?.id) {
-    const err = new Error(`http_${created.status}`);
-    err.status = created.status;
-    throw err;
+    throw googleHttpError(created);
   }
   return created.body.id;
 }
@@ -223,17 +228,16 @@ export async function deleteCalendarEvent({ eventId, accessToken, calendarId, fe
   const path = `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
   const r = await calendarFetch(accessToken, 'DELETE', path, undefined, fetchImpl);
   if (!r.ok && r.status !== 404 && r.status !== 410) {
-    const err = new Error(`http_${r.status}`);
-    err.status = r.status;
-    throw err;
+    throw googleHttpError(r);
   }
 }
 
 export async function syncAppointmentRecord({ db, data, id, accessToken, calendarId, fetchImpl }) {
   const currentId = data.calendarEventId || null;
   if (!shouldHaveEvent(data)) {
+    if (!currentId || String(currentId).startsWith('mock-')) return { action: 'skipped' };
     await deleteCalendarEvent({ eventId: currentId, accessToken, calendarId, fetchImpl });
-    if (currentId) await db.doc(`appointments/${id}`).update({ calendarEventId: FieldValue.delete() });
+    await db.doc(`appointments/${id}`).update({ calendarEventId: FieldValue.delete() });
     return { action: 'deleted' };
   }
   const evId = await upsertCalendarEvent({ data, id, eventId: currentId, accessToken, calendarId, fetchImpl });
@@ -292,7 +296,7 @@ export async function handleGcalSync(req, deps = {}) {
 export async function reconcileAppointments({ db, accessToken, calendarId, fetchImpl, now = new Date(), lookbackDays = 14, limit = 80 }) {
   const from = new Date(now.getTime() - lookbackDays * 86400000);
   const snap = await db.collection('appointments').where('start', '>=', from).limit(limit).get();
-  const summary = { scanned: 0, created: 0, updated: 0, deleted: 0, failed: 0 };
+  const summary = { scanned: 0, created: 0, updated: 0, deleted: 0, skipped: 0, failed: 0 };
   for (const doc of snap.docs) {
     summary.scanned++;
     try {
@@ -302,9 +306,15 @@ export async function reconcileAppointments({ db, accessToken, calendarId, fetch
       if (r.action === 'created') summary.created++;
       else if (r.action === 'updated') summary.updated++;
       else if (r.action === 'deleted') summary.deleted++;
+      else if (r.action === 'skipped') summary.skipped++;
     } catch (e) {
       summary.failed++;
-      console.error(JSON.stringify({ event: 'gcal_reconcile_item_failed', status: e.status || 0 }));
+      console.error(JSON.stringify({
+        event: 'gcal_reconcile_item_failed',
+        status: e.status || 0,
+        reason: e.reason || null,
+        message: e.googleMessage || e.message || null,
+      }));
     }
   }
   return summary;
@@ -453,7 +463,7 @@ export async function handleGcalOauthCallback(req, deps = {}) {
       db: sdk.db, accessToken: tokens.access_token, calendarId: config.calendarId, fetchImpl,
     });
     return htmlPage('Google Calendar collegato',
-      `Collegato come <strong>${escapeHtml(email)}</strong>. Prenotazioni allineate: create ${result.created}, aggiornate ${result.updated}, rimosse ${result.deleted}${result.failed ? `, non riuscite ${result.failed}` : ''}.`);
+      `Collegato come <strong>${escapeHtml(email)}</strong>. Prenotazioni allineate: create ${result.created}, aggiornate ${result.updated}, rimosse ${result.deleted}, già a posto ${result.skipped || 0}${result.failed ? `, non riuscite ${result.failed}` : ''}.`);
   } catch {
     return htmlPage('Google Calendar collegato',
       `Collegato come <strong>${escapeHtml(email)}</strong>. L’allineamento delle prenotazioni esistenti verrà ritentato automaticamente.`);
