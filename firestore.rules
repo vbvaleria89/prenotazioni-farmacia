@@ -1,0 +1,193 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function isEmployee() { return signedIn() && exists(/databases/$(db)/documents/employees/$(request.auth.uid)); }
+    function isActiveEmployee() { return isEmployee() && get(/databases/$(db)/documents/employees/$(request.auth.uid)).data.get('attivo', true) == true; }
+    function isAdmin() { return isEmployee() && get(/databases/$(db)/documents/employees/$(request.auth.uid)).data.ruolo == 'admin'; }
+
+    // Catalogo e orari: lettura pubblica (home cliente senza race sull'auth anonima)
+    match /settings/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /availability/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /rooms/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /services/{id} { allow read: if true; allow write: if isAdmin(); }
+    // Servizi che ogni persona può erogare (solo id servizio; vuoto = tutti).
+    match /staffServices/{uid} { allow read: if true; allow write: if isAdmin(); }
+    // Bacheca: i clienti leggono solo le voci attive; le scrive l'admin.
+    match /notices/{id} {
+      allow read: if isEmployee() || resource.data.attivo == true;
+      allow create, update: if isEmployee()
+        && request.resource.data.titolo is string
+        && request.resource.data.titolo.size() > 0
+        && request.resource.data.titolo.size() < 140
+        && request.resource.data.testo is string
+        && request.resource.data.testo.size() < 2000
+        && request.resource.data.tipo in ['novita', 'evento', 'promo']
+        && request.resource.data.attivo is bool
+        && request.resource.data.ordine is number
+        && request.resource.data.periodo in ['', 'settimana', 'mese']
+        && request.resource.data.imageUrl is string
+        && request.resource.data.imageUrl.size() < 450000
+        && (!('serviceId' in request.resource.data) || (request.resource.data.serviceId is string && request.resource.data.serviceId.size() < 100
+            && (request.resource.data.serviceId == '' || request.resource.data.tipo == 'evento')))
+        && (!('serviceName' in request.resource.data) || (request.resource.data.serviceName is string && request.resource.data.serviceName.size() < 120));
+      allow delete: if isEmployee();
+    }
+
+    // employees: nome stringa 1..99; email, ruolo e attivo non modificabili dal proprio account.
+    match /employees/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isEmployee();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (isActiveEmployee() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome'])
+        && request.resource.data.nome is string
+        && request.resource.data.nome.size() > 0 && request.resource.data.nome.size() < 100);
+    }
+    function validCustomerContacts(data) {
+      return data.email is string && data.email.size() < 120
+        && (data.email == '' || data.email.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$'))
+        && data.nome is string && data.nome.size() > 0 && data.nome.size() < 100
+        && data.telefono is string && data.telefono.size() >= 6 && data.telefono.size() < 30;
+    }
+    // Profilo del cliente finale. Lo scrive il cliente sul proprio uid o la function (Admin SDK).
+    match /customers/{uid} {
+      allow read: if isEmployee() || (signedIn() && request.auth.uid == uid);
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['email', 'nome', 'telefono', 'codiceFiscale', 'updatedAt', 'passwordChanged', 'passwordChangedAt'])
+        && request.resource.data.email is string && request.resource.data.email.size() < 120
+        && request.resource.data.nome is string && request.resource.data.nome.size() < 100
+        && request.resource.data.telefono is string && request.resource.data.telefono.size() < 30
+        && request.resource.data.codiceFiscale is string
+        && request.resource.data.codiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$');
+      // Il banco corregge soltanto i contatti di un profilo esistente, non password o identità.
+      allow update: if isActiveEmployee()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'nome', 'telefono', 'updatedAt'])
+        && validCustomerContacts(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if isAdmin();
+    }
+    match /roomDays/{d} { allow read, write: if signedIn(); }
+    match /ricette/{id} {
+      allow read: if isEmployee();
+      allow create: if signedIn() && request.resource.data.foto is string && request.resource.data.foto.size() < 900000;
+      allow delete: if isAdmin();
+    }
+    // Notifiche staff: create insieme all'appuntamento (stesso id) oppure rimborso (rimborso_{id}).
+    match /notifications/{id} {
+      allow read: if isEmployee();
+      allow create: if signedIn()
+        && existsAfter(/databases/$(db)/documents/appointments/$(id))
+        && !exists(/databases/$(db)/documents/appointments/$(id))
+        && request.resource.data.keys().hasOnly(['appointmentId', 'serviceName', 'customerName', 'start', 'createdAt', 'readBy'])
+        && request.resource.data.appointmentId == id
+        && request.resource.data.serviceName is string && request.resource.data.serviceName.size() < 120
+        && request.resource.data.customerName is string && request.resource.data.customerName.size() < 100
+        && request.resource.data.start is timestamp
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.readBy is map && request.resource.data.readBy.size() == 0;
+      // Assegnazione: solo nella stessa scrittura atomica che crea/cambia la persona.
+      // Schema: id notifica casuale; targetEmployeeId = employeeId dell'appuntamento dopo commit.
+      function validAssignment(data) {
+        let apptPath = /databases/$(db)/documents/appointments/$(data.appointmentId);
+        let after = getAfter(apptPath).data;
+        return data.keys().hasOnly(['appointmentId', 'serviceName', 'customerName', 'start', 'createdAt', 'readBy', 'type', 'targetEmployeeId'])
+          && data.appointmentId is string && data.appointmentId.size() > 0 && data.appointmentId.size() < 129
+          && data.type == 'assegnazione'
+          && data.targetEmployeeId is string && data.targetEmployeeId.size() > 0 && data.targetEmployeeId.size() < 129
+          && data.targetEmployeeId == after.employeeId
+          && exists(/databases/$(db)/documents/employees/$(data.targetEmployeeId))
+          && (isActiveEmployee() || after.get('createdBy', '') == request.auth.uid || after.get('clienteUid', '') == request.auth.uid)
+          && (!exists(apptPath) || get(apptPath).data.get('employeeId', '') != after.employeeId)
+          && data.serviceName is string && data.serviceName.size() < 120 && data.serviceName == after.servizioNome
+          && data.customerName == ''
+          && data.start is timestamp && data.start == after.start
+          && data.createdAt == request.time
+          && data.readBy is map && data.readBy.size() == 0;
+      }
+      allow create: if signedIn() && validAssignment(request.resource.data);
+      // Rimborso dopo annullamento di prenotazione pagata (cliente o staff).
+      allow create: if signedIn()
+        && id.matches('^rimborso_.+')
+        && request.resource.data.kind == 'rimborso'
+        && request.resource.data.appointmentId is string
+        && id == ('rimborso_' + request.resource.data.appointmentId)
+        && exists(/databases/$(db)/documents/appointments/$(request.resource.data.appointmentId))
+        && get(/databases/$(db)/documents/appointments/$(request.resource.data.appointmentId)).data.get('pagato', false) == true
+        && get(/databases/$(db)/documents/appointments/$(request.resource.data.appointmentId)).data.status == 'annullato'
+        && (isActiveEmployee()
+            || get(/databases/$(db)/documents/appointments/$(request.resource.data.appointmentId)).data.clienteUid == request.auth.uid
+            || get(/databases/$(db)/documents/appointments/$(request.resource.data.appointmentId)).data.createdBy == request.auth.uid)
+        && request.resource.data.serviceName is string && request.resource.data.serviceName.size() < 120
+        && request.resource.data.customerName is string && request.resource.data.customerName.size() < 100
+        && request.resource.data.start is timestamp
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.readBy is map && request.resource.data.readBy.size() == 0
+        && (!('phone' in request.resource.data) || (request.resource.data.phone is string && request.resource.data.phone.size() < 30))
+        && (!('importo' in request.resource.data) || request.resource.data.importo is number)
+        && (!('metodoPagamento' in request.resource.data) || (request.resource.data.metodoPagamento is string && request.resource.data.metodoPagamento.size() < 20));
+      allow update: if isEmployee()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+        && request.resource.data.readBy.diff(resource.data.readBy).affectedKeys().hasOnly([request.auth.uid])
+        && request.resource.data.readBy[request.auth.uid] == true;
+      // Anteprima aggiornata dalla modifica prenotazione; readBy e metadati immutabili.
+      allow update: if isActiveEmployee()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['appointmentId', 'serviceName', 'customerName', 'start'])
+        && request.resource.data.appointmentId == id
+        && request.resource.data.serviceName is string && request.resource.data.serviceName.size() < 120
+        && request.resource.data.customerName is string && request.resource.data.customerName.size() < 100
+        && request.resource.data.start is timestamp;
+      allow delete: if isAdmin();
+    }
+    match /appointments/{id} {
+      allow read: if isEmployee()
+        || (signedIn() && resource.data.clienteUid == request.auth.uid)
+        || (signedIn() && request.auth.token.email != null && resource.data.clienteEmail == request.auth.token.email);
+      allow create: if signedIn()
+        && request.resource.data.status == 'inAttesa'
+        && request.resource.data.servizio is string
+        && (!('esenzione' in request.resource.data) || request.resource.data.esenzione is bool)
+        && (request.resource.data.get('pagato', false) == false || isEmployee())
+        && request.resource.data.clienteNome is string && request.resource.data.clienteNome.size() < 100
+        && request.resource.data.clienteTel is string && request.resource.data.clienteTel.size() < 30
+        && request.resource.data.clienteCodiceFiscale is string
+        && request.resource.data.clienteCodiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$')
+        && (request.resource.data.get('esenzione', false) == false || (request.resource.data.ricettaNumero is string && request.resource.data.ricettaNumero.size() > 0 && request.resource.data.ricettaNumero.size() < 60))
+        && (!('clienteUid' in request.resource.data) || request.resource.data.clienteUid == request.auth.uid)
+        && !request.resource.data.keys().hasAny(['clienteAccount', 'accountLinkedAt', 'receiptSentAt']);
+      allow update: if isEmployee();
+      // Cliente: sync calendarEventId dopo create, oppure annullamento proprio entro regole app (24h lato client).
+      allow update: if signedIn()
+        && (resource.data.createdBy == request.auth.uid || resource.data.clienteUid == request.auth.uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'calendarEventId'])
+        && request.resource.data.status == resource.data.status;
+      allow update: if signedIn()
+        && (resource.data.createdBy == request.auth.uid || resource.data.clienteUid == request.auth.uid)
+        && resource.data.status in ['inAttesa', 'confermato']
+        && request.resource.data.status == 'annullato'
+        && request.resource.data.annullatoDa == 'cliente'
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'updatedBy', 'annullatoDa', 'annullatoAt', 'rimborsoRichiesto', 'rimborsoStato', 'rimborsoAt', 'clienteChiamato'])
+        && request.resource.data.get('pagato', false) == resource.data.get('pagato', false)
+        && (
+             resource.data.get('pagato', false) == false
+             || (request.resource.data.rimborsoRichiesto == true
+                 && request.resource.data.rimborsoStato == 'pending'
+                 && request.resource.data.clienteChiamato == false)
+           )
+        && (resource.data.get('pagato', false) == true
+            || !request.resource.data.diff(resource.data).affectedKeys()
+                .hasAny(['rimborsoRichiesto', 'rimborsoStato', 'rimborsoAt', 'clienteChiamato']));
+      // Cliente: riprogramma propria prenotazione attiva se mancano ≥ 24h (stesso servizio/dati).
+      allow update: if signedIn()
+        && (resource.data.createdBy == request.auth.uid || resource.data.clienteUid == request.auth.uid)
+        && resource.data.status in ['inAttesa', 'confermato']
+        && request.resource.data.status == resource.data.status
+        && resource.data.start > request.time + duration.value(24, 'h')
+        && request.resource.data.start > request.time
+        && request.resource.data.riprogrammatoDa == 'cliente'
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['start', 'end', 'roomId', 'roomName', 'employeeId', 'employeeNome', 'updatedBy', 'riprogrammatoDa', 'riprogrammatoAt']);
+      allow delete: if isAdmin();
+    }
+  }
+}

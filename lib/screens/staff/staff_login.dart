@@ -1,0 +1,65 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import '../../app.dart';
+import '../../theme/brand.dart';
+import 'staff_hub.dart';
+
+class StaffLogin extends StatefulWidget {
+  const StaffLogin({super.key});
+  @override
+  State<StaffLogin> createState() => _StaffLoginState();
+}
+
+class _StaffLoginState extends State<StaffLogin> {
+  final _email = TextEditingController();
+  final _pass = TextEditingController();
+  bool _busy = false;
+  String? _err;
+
+  Future<void> _login() async {
+    setState(() { _busy = true; _err = null; });
+    try {
+      final e = await staffAuth.signIn(_email.text.trim(), _pass.text);
+      if (!mounted) return;
+      Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => StaffHub(employee: e)), (route) => false);
+    } on FirebaseAuthException catch (e) {
+      setState(() => _err = e.code == 'invalid-credential' || e.code == 'wrong-password' || e.code == 'user-not-found'
+          ? 'Email o password errate' : 'Accesso non riuscito (${e.code})');
+    } on StateError catch (e) {
+      setState(() => _err = e.message);
+    } catch (e) {
+      setState(() => _err = 'Accesso non riuscito: $e');
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: const BrandAppBar(subtitle: 'Riservato al personale'),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(16), children: [
+            const Icon(Icons.lock_outline, size: 48, color: Brand.primary),
+            const SizedBox(height: 8),
+            const Text('Accesso personale farmacia', textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Brand.primary)),
+            const SizedBox(height: 4),
+            const Text('Area riservata a staff e amministrazione.\nPer prenotare non serve accedere.', textAlign: TextAlign.center),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Torna alla prenotazione')),
+            const SizedBox(height: 8),
+            TextField(controller: _email, keyboardType: TextInputType.emailAddress, autofillHints: const [AutofillHints.email],
+                decoration: const InputDecoration(labelText: 'Email')),
+            TextField(controller: _pass, obscureText: true, autofillHints: const [AutofillHints.password],
+                decoration: const InputDecoration(labelText: 'Password'), onSubmitted: (_) => _login()),
+            if (_err != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_err!, style: const TextStyle(color: Colors.red))),
+            const SizedBox(height: 24),
+            SizedBox(height: 56, child: FilledButton(onPressed: _busy ? null : _login,
+                child: _busy ? const CircularProgressIndicator() : const Text('Entra', style: TextStyle(fontSize: 18)))),
+          ]),
+        ),
+      ),
+    );
+  }
+}

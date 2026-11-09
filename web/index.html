@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!-- build 2026-11-06-v38 -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided by `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A new Flutter project.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="farmacia_prenotazioni">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>Farmacia San Ciro dott.ri Guerra - Prenotazioni</title>
+  <meta name="google-signin-client_id" content="444833221252-pivii37uqhrshlhtfq4a5i83kl5efef7.apps.googleusercontent.com">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="gcal.js?v=2026-11-06-v38"></script>
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script>
+  /* farmacia-kill-sw + build-bust 2026-11-06-v38 */
+  (function () {
+    var BUILD = '2026-11-06-v38';
+    var prev = null;
+    try { prev = localStorage.getItem('farmacia_build'); } catch (e) {}
+    var changed = prev !== BUILD;
+    function finish() {
+      try { localStorage.setItem('farmacia_build', BUILD); } catch (e) {}
+      // Una sola ricarica per build nuova (mobile senza hard refresh)
+      if (changed) {
+        var k = 'swk_' + BUILD;
+        try {
+          if (!sessionStorage.getItem(k)) {
+            sessionStorage.setItem(k, '1');
+            location.reload();
+            return;
+          }
+        } catch (e) {}
+      }
+    }
+    var p = Promise.resolve();
+    if ('serviceWorker' in navigator) {
+      p = navigator.serviceWorker.getRegistrations().then(function (rs) {
+        return Promise.all(rs.map(function (r) { return r.unregister(); }));
+      });
+    }
+    p.then(function () {
+      if (!window.caches) return;
+      return caches.keys().then(function (ks) {
+        return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+      });
+    }).then(finish).catch(finish);
+  })();
+  </script>
+  <script src="flutter_bootstrap.js?v=2026-11-06-v38" async></script>
+</body>
+</html>

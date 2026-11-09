@@ -1,0 +1,1 @@
+void openExternal(String url) {}

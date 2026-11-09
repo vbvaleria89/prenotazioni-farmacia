@@ -1,0 +1,39 @@
+# Build web Flutter + function di conferma. Le env (RESEND_*, FIREBASE_SERVICE_ACCOUNT,
+# MAIL_FROM, MAIL_REPLY_TO) si impostano sul sito Netlify, non qui.
+[build]
+  command = "flutter build web --release"
+  publish = "build/web"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  # firebase-admin non va impacchettato da esbuild (dipendenze dinamiche).
+  external_node_modules = ["firebase-admin"]
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+[[headers]]
+  for = "/main.dart.js"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+[[headers]]
+  for = "/flutter_bootstrap.js"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+[[headers]]
+  for = "/flutter.js"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+[[headers]]
+  for = "/flutter_service_worker.js"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"

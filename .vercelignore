@@ -1,0 +1,11 @@
+secrets
+android
+ios
+test
+docs
+.dart_tool
+node_modules
+*.xlsx
+*.iml
+build/*
+!build/web
