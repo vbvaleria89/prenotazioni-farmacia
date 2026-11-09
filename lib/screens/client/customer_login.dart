@@ -5,6 +5,7 @@ import '../../models/personal_role.dart';
 import '../../theme/brand.dart';
 import '../staff/staff_hub.dart';
 import 'my_bookings.dart';
+import '../../widgets/auth_login_form.dart';
 
 /// Apre il login oppure, se la sessione c'è già, l'area giusta (cliente o staff).
 Future<void> openPersonalArea(BuildContext context) async {
@@ -40,7 +41,7 @@ class _CustomerLoginState extends State<CustomerLogin> {
   final _pass = TextEditingController();
   bool _busy = false;
   bool _checking = true;
-  bool _staySignedIn = true;
+  bool _staySignedIn = false;
   String? _err;
   String? _signedEmail;
 
@@ -48,6 +49,13 @@ class _CustomerLoginState extends State<CustomerLogin> {
   void initState() {
     super.initState();
     _resumeIfSignedIn();
+  }
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _pass.dispose();
+    super.dispose();
   }
 
   Future<void> _resumeIfSignedIn() async {
@@ -73,6 +81,7 @@ class _CustomerLoginState extends State<CustomerLogin> {
     setState(() { _busy = true; _err = null; });
     try {
       final session = await customerAuth.signIn(_email.text.trim(), _pass.text, staySignedIn: _staySignedIn);
+      AuthLoginForm.markSaved();
       if (!mounted) return;
       final next = session.role == PersonalRole.staff && session.employee != null
           ? StaffHub(employee: session.employee!)
@@ -123,18 +132,20 @@ class _CustomerLoginState extends State<CustomerLogin> {
                 ]),
               ])),
             ),
-            TextField(controller: _email, keyboardType: TextInputType.emailAddress, autofillHints: const [AutofillHints.email],
-                decoration: const InputDecoration(labelText: 'Email')),
-            TextField(controller: _pass, obscureText: true, autofillHints: const [AutofillHints.password],
-                decoration: const InputDecoration(labelText: 'Password'), onSubmitted: (_) => _login()),
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              activeColor: Brand.primary,
-              value: _staySignedIn,
-              onChanged: _busy ? null : (v) => setState(() => _staySignedIn = v ?? true),
-              title: const Text('Resta connesso', style: TextStyle(fontWeight: FontWeight.w700, color: Brand.primary)),
-              subtitle: const Text('Attivo di default: chiudi pure il browser, al ritorno trovi le tue prenotazioni.'),
+            AuthLoginForm(
+              email: _email,
+              password: _pass,
+              busy: _busy,
+              onSubmit: _login,
+              footer: CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                activeColor: Brand.primary,
+                value: _staySignedIn,
+                onChanged: _busy ? null : (v) => setState(() => _staySignedIn = v ?? false),
+                title: const Text('Resta connesso', style: TextStyle(fontWeight: FontWeight.w700, color: Brand.primary)),
+                subtitle: const Text('Solo per i clienti, sul tuo dispositivo. Non usarlo sui computer della farmacia: alla chiusura del browser resti comunque collegato.'),
+              ),
             ),
             if (_err != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_err!, style: const TextStyle(color: Colors.red))),
             const SizedBox(height: 24),

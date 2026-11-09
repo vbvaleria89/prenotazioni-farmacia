@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import '../models/customer.dart';
 import '../models/codice_fiscale.dart';
 import '../models/personal_role.dart';
@@ -28,25 +27,29 @@ class CustomerAuth {
   /// Attende il ripristino della sessione (su web currentUser può arrivare un attimo dopo).
   Future<User?> restoredUser() => _auth.authStateChanges().first;
 
-  /// Su web: LOCAL se «Resta connesso», altrimenti solo la sessione del browser.
+  /// Su web: LOCAL solo se «Resta connesso», altrimenti sessione della scheda (SESSION).
   Future<void> usePersistence({required bool staySignedIn}) async {
-    rememberStaySignedIn(staySignedIn);
-    if (!kIsWeb) return;
-    await _auth.setPersistence(staySignedIn ? Persistence.LOCAL : Persistence.SESSION);
+    try { await applyAuthPersistence(staySignedIn: staySignedIn); } catch (_) {}
   }
 
-  Future<PersonalSession> signIn(String email, String password, {bool staySignedIn = true}) async {
+  Future<PersonalSession> signIn(String email, String password, {bool staySignedIn = false}) async {
     authLoginInProgress = true;
     UserCredential cred;
     try {
-      try { await usePersistence(staySignedIn: staySignedIn); } catch (_) {}
+      // SESSION di default prima del signIn (più sicuro sulle postazioni condivise).
       // Niente signOut dell'anonimo: signInWithEmailAndPassword lo sostituisce
       // e si evita la gara con ensureClientAuth che ricreava un anonimo.
+      await usePersistence(staySignedIn: staySignedIn);
       cred = await _auth.signInWithEmailAndPassword(email: email.trim(), password: password);
     } finally {
       authLoginInProgress = false;
     }
-    return _sessionFor(cred.user!.uid);
+    final session = await _sessionFor(cred.user!.uid);
+    // Staff/admin non restano persistenti, anche se la casella era spuntata.
+    if (session.role == PersonalRole.staff) {
+      await usePersistence(staySignedIn: false);
+    }
+    return session;
   }
 
   Future<PersonalSession> sessionForCurrentUser() async {

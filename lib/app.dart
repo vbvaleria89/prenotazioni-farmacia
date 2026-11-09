@@ -3,11 +3,11 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/role_picker.dart';
 import 'services/booking_service.dart';
 import 'services/calendar_service.dart';
-import 'services/customer_auth.dart';
 export 'services/customer_auth.dart' show customerAuth, CustomerAuth, PersonalSession;
 import 'services/staff_auth.dart';
 import 'services/google_calendar_service.dart';
 import 'theme/brand.dart';
+import 'widgets/staff_idle_guard.dart';
 
 final googleCalendar = GoogleCalendarService(fallback: MockCalendarService());
 final bookingService = BookingService(calendar: googleCalendar);
@@ -19,6 +19,8 @@ class FarmaciaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: farmaciaNavigatorKey,
+      builder: (context, child) => StaffIdleGuard(child: child ?? const SizedBox.shrink()),
       title: Brand.name,
       debugShowCheckedModeBanner: false,
       locale: const Locale('it', 'IT'),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../theme/brand.dart';
 import 'staff_hub.dart';
+import '../../widgets/auth_login_form.dart';
 
 class StaffLogin extends StatefulWidget {
   const StaffLogin({super.key});
@@ -16,10 +17,18 @@ class _StaffLoginState extends State<StaffLogin> {
   bool _busy = false;
   String? _err;
 
+  @override
+  void dispose() {
+    _email.dispose();
+    _pass.dispose();
+    super.dispose();
+  }
+
   Future<void> _login() async {
     setState(() { _busy = true; _err = null; });
     try {
       final e = await staffAuth.signIn(_email.text.trim(), _pass.text);
+      AuthLoginForm.markSaved();
       if (!mounted) return;
       Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => StaffHub(employee: e)), (route) => false);
     } on FirebaseAuthException catch (e) {
@@ -49,10 +58,7 @@ class _StaffLoginState extends State<StaffLogin> {
             const Text('Area riservata a staff e amministrazione.\nPer prenotare non serve accedere.', textAlign: TextAlign.center),
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Torna alla prenotazione')),
             const SizedBox(height: 8),
-            TextField(controller: _email, keyboardType: TextInputType.emailAddress, autofillHints: const [AutofillHints.email],
-                decoration: const InputDecoration(labelText: 'Email')),
-            TextField(controller: _pass, obscureText: true, autofillHints: const [AutofillHints.password],
-                decoration: const InputDecoration(labelText: 'Password'), onSubmitted: (_) => _login()),
+            AuthLoginForm(email: _email, password: _pass, busy: _busy, onSubmit: _login),
             if (_err != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_err!, style: const TextStyle(color: Colors.red))),
             const SizedBox(height: 24),
             SizedBox(height: 56, child: FilledButton(onPressed: _busy ? null : _login,

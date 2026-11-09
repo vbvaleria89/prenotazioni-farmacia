@@ -16,6 +16,8 @@ import 'staff_list.dart';
 import 'staff_notices.dart';
 import 'staff_notifications.dart';
 import 'staff_today.dart';
+import '../../widgets/staff_idle_guard.dart';
+import '../../services/auth_persistence.dart';
 
 /// Home staff/admin: griglia di tasti grandi, pensata per il desktop.
 class StaffHub extends StatefulWidget {
@@ -32,9 +34,13 @@ class _StaffHubState extends State<StaffHub> {
     super.initState();
     unawaited(bookingService.backfillUpcomingBlocks());
     unawaited(bookingService.backfillDeviceHolds());
+    // Anche se un vecchio «Resta connesso» era in localStorage, lo staff resta su SESSION.
+    unawaited(applyAuthPersistence(staySignedIn: false));
+    StaffIdleWatch.instance.activate();
   }
 
   Future<void> _logout() async {
+    StaffIdleWatch.instance.deactivate();
     final nav = Navigator.of(context);
     await staffAuth.signOut();
     nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const RolePicker()), (_) => false);

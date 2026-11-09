@@ -43,8 +43,8 @@ void main() {
     expect(customerGreeting(nome: null, displayName: null, email: ''), 'cliente');
   });
 
-  test('resta connesso: il default è sì, solo 0 lo spegne', () {
-    expect(preferLocalPersistence(null), isTrue);
+  test('resta connesso: il default è no, solo 1 lo accende', () {
+    expect(preferLocalPersistence(null), isFalse);
     expect(preferLocalPersistence('1'), isTrue);
     expect(preferLocalPersistence('0'), isFalse);
   });

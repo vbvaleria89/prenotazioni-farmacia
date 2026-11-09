@@ -12,6 +12,8 @@ class StaffAuth {
     authLoginInProgress = true;
     final UserCredential cred;
     try {
+      // Sempre SESSION: logout alla chiusura della scheda. Niente signOut dell'anonimo.
+      try { await applyAuthPersistence(staySignedIn: false); } catch (_) {}
       cred = await _auth.signInWithEmailAndPassword(email: email, password: password);
     } finally {
       authLoginInProgress = false;
