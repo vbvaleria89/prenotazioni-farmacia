@@ -66,19 +66,76 @@ export function stanzaLabel(data) {
   return DEFAULT_ROOMS[id] || `Stanza ${id}`;
 }
 
-/** Titolo e descrizione allineati a GoogleCalendarService (niente dati cliente). */
+export function customerDisplayName(data) {
+  const name = plain(data?.clienteNome, 100);
+  if (name) return name;
+  const email = normalizeEmail(data?.clienteEmail);
+  if (email) return email;
+  return 'Cliente';
+}
+
+/** Tel URI cliccabile (prefisso +39 se manca il prefisso internazionale). */
+export function telUri(phone) {
+  const raw = String(phone ?? '').trim();
+  if (!raw) return null;
+  let n = raw.replace(/[^\d+]/g, '');
+  if (n.startsWith('00')) n = `+${n.slice(2)}`;
+  const digits = n.replace(/\+/g, '');
+  if (digits.length < 6) return null;
+  if (n.startsWith('+')) return `tel:${n}`;
+  if (n.startsWith('39') && n.length >= 11) return `tel:+${n}`;
+  if (n.startsWith('0')) return `tel:+39${n.slice(1)}`;
+  return `tel:+39${n}`;
+}
+
+export function statusLabel(status) {
+  switch (String(status || '')) {
+    case 'inAttesa': return 'Da confermare';
+    case 'confermato': return 'Confermato';
+    case 'completato': return 'Effettuata';
+    case 'annullato': return 'Annullato';
+    default: return String(status || '').trim();
+  }
+}
+
+export function paymentLabel(data) {
+  if (!data?.pagato) return '';
+  const m = String(data.metodoPagamento || '').trim().toLowerCase();
+  if (m === 'carta') return 'Pagato · Carta';
+  if (m === 'bancomat') return 'Pagato · Bancomat';
+  return 'Pagato';
+}
+
+/** Titolo e descrizione allineati a GoogleCalendarService. */
 export function eventFromAppointment(id, data) {
   const service = plain(data?.servizioNome || data?.servizio, 120) || 'Prenotazione';
   const stanza = stanzaLabel(data);
   const operator = plain(data?.employeeNome, 100);
   const code = shortCode(id);
-  const summary = [service, stanza, operator, code].filter(Boolean).join(' · ');
-  const description = `Prenotazione app · ${stanza}${operator ? ` · Operatore: ${operator}` : ''} · codice ${code}`;
+  const customer = customerDisplayName(data);
+  const summary = `${customer} · ${service}`;
+  const lines = [];
+  const phone = plain(data?.clienteTel, 40);
+  if (phone) {
+    const href = telUri(phone);
+    // Link HTML tel: + riga URI: cliccabile su Calendar web e app.
+    lines.push(href
+      ? `Telefono: <a href="${href}">${phone}</a>`
+      : `Telefono: ${phone}`);
+    if (href) lines.push(href);
+  }
+  lines.push(`Servizio: ${service}`);
+  lines.push(`Stanza: ${stanza}`);
+  if (operator) lines.push(`Operatore: ${operator}`);
+  const paid = paymentLabel(data);
+  const stato = statusLabel(data?.status);
+  lines.push(`Stato: ${stato}${paid ? ` · ${paid}` : ''}`);
+  lines.push(`Codice: ${code}`);
   const start = toDate(data?.start);
   const end = toDate(data?.end);
   return {
     summary,
-    description,
+    description: lines.join('\n'),
     start: start ? start.toISOString() : null,
     end: end ? end.toISOString() : null,
   };

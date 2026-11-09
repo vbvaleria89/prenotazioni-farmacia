@@ -16,32 +16,52 @@ test('shortCode e stanza: fallback stanze default, roomName ha priorità', () =>
   assert.equal(stanzaLabel({ roomId: 9 }), 'Stanza 9');
 });
 
-test('mapping evento: titolo/descrizione con operatore, niente dati cliente', () => {
+test('mapping evento: titolo Nome · Servizio e descrizione con telefono cliccabile', () => {
   const ev = eventFromAppointment(id, {
     servizioNome: 'Holter cardiaco', servizio: 'holter',
     roomId: 1, roomName: 'Stanza servizi',
     employeeNome: 'Roberta S.', employeeId: 'emp1',
     start: new Date('2026-11-09T15:00:00.000Z'),
     end: new Date('2026-11-09T15:20:00.000Z'),
-    clienteNome: 'DATOPRIVATO', clienteTel: '3331234567', clienteCodiceFiscale: 'RSSMRA80A01H501U',
-    status: 'inAttesa',
+    clienteNome: 'Mario Rossi', clienteTel: '3331234567', clienteCodiceFiscale: 'RSSMRA80A01H501U',
+    status: 'inAttesa', pagato: true, metodoPagamento: 'carta',
   });
-  assert.equal(ev.summary, 'Holter cardiaco · Stanza servizi · Roberta S. · ABCDEF');
-  assert.equal(ev.description, 'Prenotazione app · Stanza servizi · Operatore: Roberta S. · codice ABCDEF');
+  assert.equal(ev.summary, 'Mario Rossi · Holter cardiaco');
+  assert.equal(ev.description, [
+    'Telefono: <a href="tel:+393331234567">3331234567</a>',
+    'tel:+393331234567',
+    'Servizio: Holter cardiaco',
+    'Stanza: Stanza servizi',
+    'Operatore: Roberta S.',
+    'Stato: Da confermare · Pagato · Carta',
+    'Codice: ABCDEF',
+  ].join('\n'));
   assert.equal(ev.start, '2026-11-09T15:00:00.000Z');
   assert.equal(ev.end, '2026-11-09T15:20:00.000Z');
-  assert.doesNotMatch(JSON.stringify(ev), /DATOPRIVATO|3331234567|RSSMRA80A01H501U/);
+  assert.doesNotMatch(JSON.stringify(ev), /RSSMRA80A01H501U/);
 });
 
-test('mapping senza operatore e con Timestamp-like', () => {
-  const ev = eventFromAppointment(id, {
-    servizio: 'ecg', roomId: 2,
+test('mapping: nome assente usa email o Cliente; senza operatore e senza telefono', () => {
+  const byEmail = eventFromAppointment(id, {
+    servizioNome: 'ECG', clienteEmail: 'mario.rossi@example.com', roomId: 2,
     start: { seconds: Date.parse('2026-11-13T08:00:00.000Z') / 1000 },
     end: { toDate: () => new Date('2026-11-13T08:10:00.000Z') },
+    status: 'confermato',
   });
-  assert.equal(ev.summary, 'ecg · Stanza consulenze · ABCDEF');
-  assert.equal(ev.description, 'Prenotazione app · Stanza consulenze · codice ABCDEF');
-  assert.equal(ev.start, '2026-11-13T08:00:00.000Z');
+  assert.equal(byEmail.summary, 'mario.rossi@example.com · ECG');
+  assert.equal(byEmail.description, [
+    'Servizio: ECG',
+    'Stanza: Stanza consulenze',
+    'Stato: Confermato',
+    'Codice: ABCDEF',
+  ].join('\n'));
+  assert.equal(byEmail.start, '2026-11-13T08:00:00.000Z');
+
+  const fallback = eventFromAppointment(id, { servizio: 'ecg', roomId: 2, status: 'completato',
+    start: new Date('2026-11-13T08:00:00.000Z'), end: new Date('2026-11-13T08:10:00.000Z') });
+  assert.equal(fallback.summary, 'Cliente · ecg');
+  assert.match(fallback.description, /Stato: Effettuata/);
+  assert.doesNotMatch(fallback.description, /Operatore:|Telefono:/);
 });
 
 test('shouldHaveEvent: attive sì, annullate no', () => {
@@ -188,9 +208,10 @@ test('gcal-sync: crea evento e salva calendarEventId', async () => {
   assert.equal(f.store.get(`appointments/${id}`).calendarEventId, 'evt-new');
   const post = f.calls.find((c) => c.method === 'POST' && String(c.url).includes('/events'));
   const payload = JSON.parse(post.body);
-  assert.equal(payload.summary, 'ECG · Stanza servizi · Luigi · ABCDEF');
+  assert.equal(payload.summary, 'Cliente · ECG');
   assert.match(payload.description, /Operatore: Luigi/);
-  assert.doesNotMatch(JSON.stringify(payload), /DATOPRIVATO/);
+  assert.match(payload.description, /Servizio: ECG/);
+  assert.match(payload.description, /Codice: ABCDEF/);
 });
 
 test('gcal-sync: annullata elimina l\'evento', async () => {

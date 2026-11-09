@@ -26,17 +26,64 @@ class GoogleCalendarService implements CalendarService {
   @override
   Future<String> createEvent(Appointment a) async {
     if (!isConnected) return fallback.createEvent(a);
-    // Nome operatore consentito; nessun dato identificativo/sanitario del cliente.
     final r = await _gcal!.callMethod<JSPromise<JSString>>('createEvent'.toJS,
         _title(a).toJS, _description(a).toJS,
         a.start.toUtc().toIso8601String().toJS, a.end.toUtc().toIso8601String().toJS).toDart;
     return r.toDart;
   }
 
-  String _title(Appointment a) => [a.service.name, a.stanzaLabel,
-    if ((a.employeeNome ?? '').trim().isNotEmpty) a.employeeNome!.trim(), a.shortCode].join(' · ');
-  String _description(Appointment a) => 'Prenotazione app · ${a.stanzaLabel}'
-    '${(a.employeeNome ?? '').trim().isNotEmpty ? ' · Operatore: ${a.employeeNome!.trim()}' : ''} · codice ${a.shortCode}';
+  String _customerLabel(Appointment a) {
+    final name = a.customerName.trim();
+    if (name.isNotEmpty) return name;
+    final mail = (a.email ?? '').trim();
+    if (mail.isNotEmpty) return mail;
+    return 'Cliente';
+  }
+
+  String? _telUri(String phone) {
+    var n = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    if (n.startsWith('00')) n = '+${n.substring(2)}';
+    final digits = n.replaceAll('+', '');
+    if (digits.length < 6) return null;
+    if (n.startsWith('+')) return 'tel:$n';
+    if (n.startsWith('39') && n.length >= 11) return 'tel:+$n';
+    if (n.startsWith('0')) return 'tel:+39${n.substring(1)}';
+    return 'tel:+39$n';
+  }
+
+  String _statusLabel(AppointmentStatus s) => switch (s) {
+        AppointmentStatus.inAttesa => 'Da confermare',
+        AppointmentStatus.confermato => 'Confermato',
+        AppointmentStatus.completato => 'Effettuata',
+        AppointmentStatus.annullato => 'Annullato',
+      };
+
+  String _title(Appointment a) => '${_customerLabel(a)} · ${a.service.name}';
+
+  String _description(Appointment a) {
+    final lines = <String>[];
+    final phone = a.phone.trim();
+    if (phone.isNotEmpty) {
+      final href = _telUri(phone);
+      lines.add(href != null ? 'Telefono: <a href="$href">$phone</a>' : 'Telefono: $phone');
+      if (href != null) lines.add(href);
+    }
+    lines.add('Servizio: ${a.service.name}');
+    lines.add('Stanza: ${a.stanzaLabel}');
+    final op = (a.employeeNome ?? '').trim();
+    if (op.isNotEmpty) lines.add('Operatore: $op');
+    var stato = 'Stato: ${_statusLabel(a.status)}';
+    if (a.pagato) {
+      stato += switch (a.metodoPagamento) {
+        'carta' => ' · Pagato · Carta',
+        'bancomat' => ' · Pagato · Bancomat',
+        _ => ' · Pagato',
+      };
+    }
+    lines.add(stato);
+    lines.add('Codice: ${a.shortCode}');
+    return lines.join('\n');
+  }
 
   /// PATCH dell'evento esistente: non perdiamo il riferimento se Google fallisce.
   Future<String> syncEvent(Appointment a, String? eventId) async {
