@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'app.dart';
+import 'models/device.dart';
 import 'models/room.dart';
 import 'firebase_options.dart';
 import 'services/auth_persistence.dart';
@@ -14,5 +15,6 @@ Future<void> main() async {
     await FirebaseAuth.instance.setPersistence(readStaySignedIn() ? Persistence.LOCAL : Persistence.SESSION);
   }
   Room.listen();
+  Device.listen();
   runApp(const FarmaciaApp());
 }

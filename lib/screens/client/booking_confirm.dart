@@ -5,7 +5,6 @@ import '../../theme/brand.dart';
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../app.dart';
@@ -14,6 +13,7 @@ import '../../models/service_type.dart';
 import '../../models/customer.dart';
 import 'client_account_bar.dart';
 import 'slot_picker.dart';
+import '../../widgets/device_unavailable_dialog.dart';
 
 class BookingConfirm extends StatefulWidget {
   final ServiceType service;
@@ -93,6 +93,7 @@ class _BookingConfirmState extends State<BookingConfirm> {
     if (_busy) return;
     setState(() { _busy = true; _loading = 'Salvataggio prenotazione…'; });
     await Future<void>.delayed(const Duration(milliseconds: 16));
+    if (!mounted) return;
     final nav = Navigator.of(context);
     try {
       final metodo = widget.fromStaff ? _metodoPagamento : null;
@@ -120,6 +121,8 @@ class _BookingConfirmState extends State<BookingConfirm> {
       }
       await _showCode(code, mail: mail);
       nav.popUntil((r) => r.isFirst);
+    } on DeviceUnavailableException catch (e) {
+      if (mounted) await showDeviceUnavailableDialog(context, e);
     } on StateError catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {

@@ -10,6 +10,8 @@ service cloud.firestore {
     match /settings/{id} { allow read: if true; allow write: if isAdmin(); }
     match /availability/{id} { allow read: if true; allow write: if isAdmin(); }
     match /rooms/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /devices/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /deviceDays/{d} { allow read, write: if signedIn(); }
     match /services/{id} { allow read: if true; allow write: if isAdmin(); }
     // Servizi che ogni persona può erogare (solo id servizio; vuoto = tutti).
     match /staffServices/{uid} { allow read: if true; allow write: if isAdmin(); }

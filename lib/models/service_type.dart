@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'device.dart';
 import 'room.dart';
+export 'device.dart';
 export 'room.dart';
 
 /// Stanze fisse della farmacia (1 e 2). Una prenotazione ne occupa sempre una sola.
@@ -29,10 +31,14 @@ class ServiceType {
   /// Stanze utilizzabili in alternativa (1 e/o 2). Una prenotazione ne prende una sola.
   /// Default migrazione: solo Stanza 1 (comportamento stanza unica precedente).
   final Set<int> stanze;
+  /// Apparecchio condiviso (collection `devices`). Vuoto = nessuno.
+  final String deviceId;
+  /// Ore in cui l'apparecchio resta occupato dopo l'inizio (es. 24 per l'Holter).
+  final int deviceHoldHours;
 
   const ServiceType({required this.id, required this.name, required this.description, required this.duration,
       this.attivo = true, this.prezzo, this.prezzoScontato, this.giorni = const {}, this.dipendenteId = '', this.dipendenteNome = '', this.ordine = 0,
-      this.stanze = const {kStanza1}});
+      this.stanze = const {kStanza1}, this.deviceId = '', this.deviceHoldHours = 0});
 
   bool get scontato => prezzo != null && prezzoScontato != null && prezzoScontato! < prezzo!;
   double? get prezzoFinale => scontato ? prezzoScontato : prezzo;
@@ -47,6 +53,23 @@ class ServiceType {
   }
 
   String get stanzeLabel => labelStanze(stanzeOrdinate);
+
+  bool get usesDevice => deviceId.isNotEmpty && deviceHoldHours > 0;
+  DateTime deviceHoldEnd(DateTime start) => start.add(Duration(hours: deviceHoldHours));
+  String get deviceLabel => usesDevice ? Device.label(deviceId) : '';
+
+  static String _parseDeviceId(Map<String, dynamic> m, String name) {
+    final raw = (m['deviceId'] ?? '').toString().trim();
+    if (raw.isNotEmpty) return raw;
+    return Device.inferredId(name) ?? '';
+  }
+
+  static int _parseHoldHours(Map<String, dynamic> m, String name) {
+    final n = (m['deviceHoldHours'] as num?)?.toInt() ?? 0;
+    if (n > 0) return n;
+    if ((m['deviceId'] ?? '').toString().trim().isNotEmpty) return Device.holterDefaultHours;
+    return Device.inferredHours(name);
+  }
 
   static double? _num(dynamic v) => v is num ? v.toDouble() : null;
 
@@ -73,6 +96,8 @@ class ServiceType {
         dipendenteNome: (m['dipendenteNome'] ?? '') as String,
         ordine: (m['ordine'] as num? ?? 0).toInt(),
         stanze: _parseStanze(m['stanze']),
+        deviceId: _parseDeviceId(m, (m['nome'] ?? id) as String),
+        deviceHoldHours: _parseHoldHours(m, (m['nome'] ?? id) as String),
       );
 
   factory ServiceType.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) => ServiceType.fromMap(d.id, d.data() ?? {});
@@ -82,13 +107,26 @@ class ServiceType {
         'prezzo': prezzo, 'prezzoScontato': prezzoScontato, 'giorni': giorni.toList()..sort(),
         'dipendenteId': dipendenteId, 'dipendenteNome': dipendenteNome, 'ordine': ordine,
         'stanze': stanzeOrdinate,
+        'deviceId': deviceId,
+        'deviceHoldHours': deviceHoldHours,
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
   /// Cache aggiornata dallo stream `services` (usata per decodificare gli appuntamenti).
   static final Map<String, ServiceType> registry = {for (final s in mockServices) s.id: s};
-  static ServiceType lookup(String? id, {String? nome, int? durataMin}) =>
-      registry[id] ?? ServiceType(id: id ?? '?', name: nome ?? id ?? 'Servizio', description: '', duration: Duration(minutes: durataMin ?? 15));
+  static ServiceType lookup(String? id, {String? nome, int? durataMin}) {
+    final cached = registry[id];
+    if (cached != null) return cached;
+    final name = nome ?? id ?? 'Servizio';
+    return ServiceType(
+      id: id ?? '?',
+      name: name,
+      description: '',
+      duration: Duration(minutes: durataMin ?? 15),
+      deviceId: Device.inferredId(name) ?? '',
+      deviceHoldHours: Device.inferredHours(name),
+    );
+  }
 }
 
 String euro(double v) => '€ ${v.toStringAsFixed(2).replaceAll('.', ',')}';
@@ -96,6 +134,6 @@ String euro(double v) => '€ ${v.toStringAsFixed(2).replaceAll('.', ',')}';
 // Seed iniziale (usato solo se la collezione `services` è vuota). NO Otopharma. Default Stanza 1.
 const mockServices = [
   ServiceType(id: 'tricologico', name: 'Analisi tricologica', description: 'Check-up di capelli e cuoio capelluto', duration: Duration(minutes: 30), giorni: {2, 4}, ordine: 1, stanze: {kStanza1}),
-  ServiceType(id: 'holter', name: 'Holter', description: 'Applicazione Holter cardiaco/pressorio', duration: Duration(minutes: 20), ordine: 2, stanze: {kStanza1}),
+  ServiceType(id: 'holter', name: 'Holter', description: 'Applicazione Holter cardiaco/pressorio', duration: Duration(minutes: 20), ordine: 2, stanze: {kStanza1}, deviceId: Device.holterId, deviceHoldHours: Device.holterDefaultHours),
   ServiceType(id: 'analisi', name: 'Analisi varie', description: 'Glicemia, colesterolo, ecc.', duration: Duration(minutes: 15), ordine: 3, stanze: {kStanza1}),
 ];

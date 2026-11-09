@@ -31,6 +31,7 @@ class _StaffHubState extends State<StaffHub> {
   void initState() {
     super.initState();
     unawaited(bookingService.backfillUpcomingBlocks());
+    unawaited(bookingService.backfillDeviceHolds());
   }
 
   Future<void> _logout() async {

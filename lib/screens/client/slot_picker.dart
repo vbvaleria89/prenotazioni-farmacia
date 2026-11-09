@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../services/booking_service.dart';
 import '../../models/service_type.dart';
+import '../../widgets/device_unavailable_dialog.dart';
 import 'booking_confirm.dart';
 import 'client_account_bar.dart';
 
@@ -124,6 +125,14 @@ class _SlotPickerState extends State<SlotPicker> {
     if (start.isBefore(DateTime.now())) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Orario già passato')));
       return;
+    }
+    if (widget.service.usesDevice) {
+      final next = await bookingService.nextDeviceBookable(widget.service, start);
+      final busy = await bookingService.deviceBusyMessage(widget.service, start);
+      if (busy != null && mounted) {
+        await showDeviceUnavailableDialog(context, DeviceUnavailableException(widget.service.deviceLabel, nextFree: next));
+        return;
+      }
     }
     final svc = await bookingService.staffServices();
     final all = (await staffAuth.employees().first).where((e) => e.attivo && BookingService.canDo(svc, e.id, widget.service.id)).map((e) => (e.id, e.nome.isEmpty ? e.email : e.nome)).toList();

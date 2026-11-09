@@ -33,6 +33,9 @@ class Appointment {
   final int roomId;
   /// Nome stanza salvato alla prenotazione (fallback se la stanza viene eliminata).
   final String? roomName;
+  /// Apparecchio e ore di occupazione al momento della prenotazione (indipendenti da modifiche successive al servizio).
+  final String? deviceId;
+  final int? deviceHoldHours;
   /// Annullamento: `cliente` | `staff` | null.
   final String? annullatoDa;
   final DateTime? annullatoAt;
@@ -45,12 +48,16 @@ class Appointment {
 
   Appointment({required this.id, required this.service, required this.start, DateTime? end, required this.customerName, required this.phone, this.email,
       this.status = AppointmentStatus.inAttesa, this.createdBy, this.calendarEventId, this.employeeId, this.employeeNome, this.esenzione = false, this.ricettaNumero, this.ricettaNote, this.ricettaFoto = false, this.pagato = false, this.metodoPagamento, this.clienteUid, this.clienteAccount, this.codiceFiscale,
-      this.roomId = kStanza1, this.roomName, this.annullatoDa, this.annullatoAt, this.rimborsoRichiesto = false, this.rimborsoStato, this.rimborsoAt, this.clienteChiamato = false})
+      this.roomId = kStanza1, this.roomName, this.deviceId, this.deviceHoldHours, this.annullatoDa, this.annullatoAt, this.rimborsoRichiesto = false, this.rimborsoStato, this.rimborsoAt, this.clienteChiamato = false})
       : end = end ?? start.add(service.duration);
 
   bool get blocksRoom => status == AppointmentStatus.inAttesa || status == AppointmentStatus.confermato;
   bool overlaps(DateTime s, DateTime e) => start.isBefore(e) && s.isBefore(end);
   String get stanzaLabel => Room.label(roomId, fallback: roomName);
+  String get effectiveDeviceId => (deviceId ?? '').isNotEmpty ? deviceId! : service.deviceId;
+  int get effectiveHoldHours => (deviceHoldHours ?? 0) > 0 ? deviceHoldHours! : service.deviceHoldHours;
+  bool get usesDevice => effectiveDeviceId.isNotEmpty && effectiveHoldHours > 0;
+  DateTime get deviceHoldEnd => start.add(Duration(hours: effectiveHoldHours));
   bool get rimborsoPending => rimborsoRichiesto && rimborsoStato == 'pending';
   bool get rimborsoDone => rimborsoStato == 'done';
 
@@ -115,6 +122,8 @@ class Appointment {
       codiceFiscale: m['clienteCodiceFiscale'] as String?,
       roomId: room,
       roomName: m['roomName'] as String?,
+      deviceId: (m['deviceId'] as String?)?.trim().isNotEmpty == true ? (m['deviceId'] as String).trim() : null,
+      deviceHoldHours: (m['deviceHoldHours'] as num?)?.toInt(),
       annullatoDa: m['annullatoDa'] as String?,
       annullatoAt: ts(m['annullatoAt']),
       rimborsoRichiesto: (m['rimborsoRichiesto'] ?? false) as bool,
@@ -149,6 +158,8 @@ class Appointment {
         if (employeeNome != null) 'employeeNome': employeeNome,
         'roomId': roomId,
         'roomName': Room.registry[roomId]?.nome ?? roomName,
+        if (usesDevice) 'deviceId': effectiveDeviceId,
+        if (usesDevice) 'deviceHoldHours': effectiveHoldHours,
         'createdAt': FieldValue.serverTimestamp(),
       };
 }

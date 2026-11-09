@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../models/appointment.dart';
+import '../../models/device.dart';
+import '../../widgets/device_unavailable_dialog.dart';
 import '../../theme/brand.dart';
 import 'slot_picker.dart' show hhmm;
 
@@ -82,6 +84,10 @@ class _ReschedulePageState extends State<ReschedulePage> {
       await bookingService.reschedule(a, t, asStaff: widget.asStaff);
       m.showSnackBar(SnackBar(content: Text('Prenotazione spostata al ${t.day}/${t.month} alle ${hhmm(t)}.')));
       if (mounted) Navigator.pop(context, true);
+    } on DeviceUnavailableException catch (e) {
+      if (!mounted) return;
+      setState(() => saving = false);
+      await showDeviceUnavailableDialog(context, e);
     } on StateError catch (e) {
       if (!mounted) return;
       setState(() => saving = false);

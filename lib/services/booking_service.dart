@@ -20,6 +20,8 @@ import 'google_calendar_service.dart';
 /// Se il servizio ammette entrambe, si sceglie la prima libera (preferenza 1 poi 2).
 /// Calendar: sincronizzato solo se nella sessione corrente lo staff ha collegato Google
 /// (niente Cloud Functions sul piano Spark).
+class _DeviceBusyInTx implements Exception {}
+
 class BookingService extends ChangeNotifier {
   final GoogleCalendarService calendar;
   BookingService({required this.calendar});
@@ -74,7 +76,27 @@ class BookingService extends ChangeNotifier {
       final t = s.id == 'tricologico';
       await saveService(ServiceType(id: s.id, name: s.name, description: s.description, duration: s.duration, ordine: s.ordine,
           giorni: t ? cfg.tricologicoDays : const {}, dipendenteId: t ? cfg.tricologoEmployeeId : '', dipendenteNome: t ? cfg.tricologoNome : '',
-          stanze: s.stanze));
+          stanze: s.stanze, deviceId: s.deviceId, deviceHoldHours: s.deviceHoldHours));
+    }
+  }
+
+  /// Collega i servizi il cui nome contiene "holter" all'apparecchio Holter (1 pezzo, 24 ore) se i campi mancano.
+  Future<void> seedHolterDevice() async {
+    await Device.seedIfEmpty();
+    final q = await servicesRef.get();
+    for (final d in q.docs) {
+      final raw = d.data();
+      final nome = (raw['nome'] ?? d.id).toString();
+      final inferred = Device.inferredId(nome);
+      if (inferred == null) continue;
+      final rawId = (raw['deviceId'] ?? '').toString().trim();
+      final rawHours = (raw['deviceHoldHours'] as num?)?.toInt() ?? 0;
+      if (rawId.isNotEmpty && rawHours > 0) continue;
+      await servicesRef.doc(d.id).set({
+        'deviceId': rawId.isNotEmpty ? rawId : inferred,
+        'deviceHoldHours': rawHours > 0 ? rawHours : Device.holterDefaultHours,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
     }
   }
 
@@ -370,8 +392,206 @@ class BookingService extends ChangeNotifier {
     return null;
   }
 
-  bool _slotOk(ServiceType service, DateTime s, DateTime e, List<Appointment> appts, List<(String, DateTime, DateTime, String, int)> blocks, List<(DateTime, DateTime)> busy, {String? excludeId}) =>
-      _pickRoom(service, s, e, appts, blocks, busy, excludeId: excludeId) != null;
+  bool _slotOk(ServiceType service, DateTime s, DateTime e, List<Appointment> appts, List<(String, DateTime, DateTime, String, int)> blocks, List<(DateTime, DateTime)> busy, {String? excludeId, List<DeviceHold> deviceHolds = const []}) =>
+      _pickRoom(service, s, e, appts, blocks, busy, excludeId: excludeId) != null
+      && _deviceFree(service, s, deviceHolds, excludeId: excludeId);
+
+  DocumentReference<Map<String, dynamic>> _deviceDayRef(DateTime d) => _db.doc('deviceDays/${_dayKey(d)}');
+
+  List<DeviceHold> _holdsOf(Map<String, dynamic>? data) {
+    final raw = data?['holds'];
+    if (raw is! Map) return const [];
+    final out = <DeviceHold>[];
+    raw.forEach((id, v) {
+      if (v is! Map) return;
+      final start = v['start'];
+      final end = v['holdEnd'];
+      if (start is! Timestamp || end is! Timestamp) return;
+      final dev = (v['deviceId'] ?? '').toString();
+      if (dev.isEmpty) return;
+      out.add(DeviceHold(appointmentId: id.toString(), deviceId: dev, start: start.toDate(), holdEnd: end.toDate(), status: (v['status'] ?? 'inAttesa').toString()));
+    });
+    return out;
+  }
+
+  Map<String, dynamic> _holdEntry(String deviceId, DateTime start, DateTime holdEnd, String status) => {
+        'deviceId': deviceId,
+        'start': Timestamp.fromDate(start),
+        'holdEnd': Timestamp.fromDate(holdEnd),
+        'status': status,
+      };
+
+  Future<List<DeviceHold>> _loadDeviceHoldsRange(DateTime from, DateTime to) async {
+    final end = to.isAfter(from) ? to : from.add(const Duration(seconds: 1));
+    final out = <DeviceHold>[];
+    for (final d in daysOverlappingHold(from, end)) {
+      try {
+        out.addAll(_holdsOf((await _deviceDayRef(d).get()).data()));
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  /// Per uno slot a [start], servono i giorni che coprono [start-hold, start+hold) così si vedono anche gli hold iniziati il giorno prima.
+  Future<List<DeviceHold>> _loadDeviceHoldsAround(DateTime start, int holdHours) async {
+    if (holdHours <= 0) return const [];
+    return _loadDeviceHoldsRange(start.subtract(Duration(hours: holdHours)), start.add(Duration(hours: holdHours)));
+  }
+
+  Future<List<DocumentSnapshot<Map<String, dynamic>>>> _txDeviceDaySnaps(Transaction tx, Iterable<DateTime> days) async {
+    final seen = <String>{};
+    final snaps = <DocumentSnapshot<Map<String, dynamic>>>[];
+    for (final d in days) {
+      if (!seen.add(_dayKey(d))) continue;
+      snaps.add(await tx.get(_deviceDayRef(d)));
+    }
+    return snaps;
+  }
+
+  List<DeviceHold> _holdsFromSnaps(Iterable<DocumentSnapshot<Map<String, dynamic>>> snaps) =>
+      [for (final s in snaps) ..._holdsOf(s.data())];
+
+  bool _deviceFree(ServiceType service, DateTime start, Iterable<DeviceHold> holds, {String? excludeId}) {
+    if (!service.usesDevice) return true;
+    final n = countOverlappingDeviceHolds(
+      deviceId: service.deviceId,
+      windowStart: start,
+      windowEnd: service.deviceHoldEnd(start),
+      holds: holds,
+      excludeId: excludeId,
+    );
+    return isDeviceQuantityFree(quantity: Device.quantityOf(service.deviceId), overlapping: n);
+  }
+
+  /// Primo inizio libero >= [requested]: fine dell'occupazione in conflitto, poi (se esistono) il primo slot in fascia.
+  Future<DateTime?> nextDeviceBookable(ServiceType service, DateTime requested, {String? excludeId}) async {
+    if (!service.usesDevice) return requested;
+    final holds = await _loadDeviceHoldsRange(
+      requested.subtract(Duration(hours: service.deviceHoldHours)),
+      requested.add(const Duration(days: 62)),
+    );
+    final t = nextFreeDeviceStart(
+      deviceId: service.deviceId,
+      holdHours: service.deviceHoldHours,
+      quantity: Device.quantityOf(service.deviceId),
+      requested: requested,
+      holds: holds,
+      excludeId: excludeId,
+    );
+    if (t == null) return null;
+    final startDay = DateTime(t.year, t.month, t.day);
+    for (var i = 0; i < 60; i++) {
+      final day = startDay.add(Duration(days: i));
+      if (!service.availableOn(day.weekday)) continue;
+      final fl = await _fasceFor(service, day);
+      if (fl.isEmpty) continue;
+      for (final f in fl) {
+        for (var slot = day.add(Duration(minutes: f.start)); !slot.add(service.duration).isAfter(day.add(Duration(minutes: f.end))); slot = slot.add(slotStep)) {
+          if (slot.isBefore(t)) continue;
+          if (_deviceFree(service, slot, holds, excludeId: excludeId)) return slot;
+        }
+      }
+    }
+    return t;
+  }
+
+  Future<DeviceUnavailableException> _deviceUnavailable(ServiceType service, DateTime start, {String? excludeId}) async =>
+      DeviceUnavailableException(service.deviceLabel, nextFree: await nextDeviceBookable(service, start, excludeId: excludeId));
+
+  /// Lettura fresca; se occupato non si deve salvare. Lancia [DeviceUnavailableException].
+  Future<void> _ensureDeviceFree(ServiceType service, DateTime start, {String? excludeId}) async {
+    if (!service.usesDevice) return;
+    final holds = await _loadDeviceHoldsAround(start, service.deviceHoldHours);
+    if (!_deviceFree(service, start, holds, excludeId: excludeId)) {
+      throw await _deviceUnavailable(service, start, excludeId: excludeId);
+    }
+  }
+
+  void _assertDeviceFreeTx(ServiceType service, DateTime start, Iterable<DeviceHold> holds, {String? excludeId}) {
+    if (!_deviceFree(service, start, holds, excludeId: excludeId)) throw _DeviceBusyInTx();
+  }
+
+  /// Null se libero o se il servizio non usa apparecchio; altrimenti messaggio per UI staff (pre-check).
+  Future<String?> deviceBusyMessage(ServiceType service, DateTime start, {String? excludeId}) async {
+    if (!service.usesDevice) return null;
+    final holds = await _loadDeviceHoldsAround(start, service.deviceHoldHours);
+    if (_deviceFree(service, start, holds, excludeId: excludeId)) return null;
+    return (await _deviceUnavailable(service, start, excludeId: excludeId)).message;
+  }
+
+  void _putHold(Transaction tx, DocumentSnapshot<Map<String, dynamic>> snap, String appointmentId, String deviceId, DateTime start, DateTime holdEnd, String status) {
+    final next = <String, dynamic>{};
+    final cur = snap.data()?['holds'];
+    if (cur is Map) cur.forEach((k, v) => next[k.toString()] = v);
+    next[appointmentId] = _holdEntry(deviceId, start, holdEnd, status);
+    tx.set(snap.reference, {'holds': next, 'touched': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+  }
+
+  void _dropHold(Transaction tx, DocumentSnapshot<Map<String, dynamic>> snap, String appointmentId) {
+    final next = <String, dynamic>{};
+    final cur = snap.data()?['holds'];
+    if (cur is Map) cur.forEach((k, v) => next[k.toString()] = v);
+    if (!next.containsKey(appointmentId)) return;
+    next.remove(appointmentId);
+    tx.set(snap.reference, {'holds': next, 'touched': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+  }
+
+  Future<void> _setDeviceHoldStatus(Appointment a, String status) async {
+    if (!a.usesDevice) return;
+    final days = daysOverlappingHold(a.start, a.deviceHoldEnd);
+    if (days.isEmpty) return;
+    try {
+      await _db.runTransaction((tx) async {
+        final snaps = <DocumentSnapshot<Map<String, dynamic>>>[];
+        for (final d in days) {
+          snaps.add(await tx.get(_deviceDayRef(d)));
+        }
+        for (final snap in snaps) {
+          final next = <String, dynamic>{};
+          final cur = snap.data()?['holds'];
+          if (cur is Map) cur.forEach((k, v) => next[k.toString()] = v);
+          final existing = next[a.id];
+          if (existing is! Map) continue;
+          next[a.id] = {...Map<String, dynamic>.from(existing), 'status': status};
+          tx.set(snap.reference, {'holds': next, 'touched': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+        }
+      });
+    } catch (_) {}
+  }
+
+  /// Scrive (o aggiorna) gli hold dell'apparecchio per una prenotazione già esistente (backfill).
+  Future<void> _writeDeviceHoldsDirect(Appointment a) async {
+    if (!a.usesDevice || a.status == AppointmentStatus.annullato) return;
+    final days = daysOverlappingHold(a.start, a.deviceHoldEnd);
+    for (final d in days) {
+      final ref = _deviceDayRef(d);
+      await _db.runTransaction((tx) async {
+        final snap = await tx.get(ref);
+        _putHold(tx, snap, a.id, a.effectiveDeviceId, a.start, a.deviceHoldEnd, a.status.name);
+      });
+    }
+  }
+
+  /// Copia le prenotazioni con apparecchio in `deviceDays` (anche completate: l'apparecchio resta occupato fino a holdEnd).
+  Future<void> backfillDeviceHolds({int daysBack = 2, int daysAhead = 21}) async {
+    try {
+      await seedHolterDevice();
+    } catch (_) {}
+    final today = _d0(DateTime.now());
+    final from = today.subtract(Duration(days: daysBack + 2));
+    final to = today.add(Duration(days: daysAhead + 2));
+    try {
+      final q = await _appts
+          .where('start', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+          .where('start', isLessThan: Timestamp.fromDate(to))
+          .get();
+      for (final a in q.docs.map(Appointment.fromDoc)) {
+        try {
+          await _writeDeviceHoldsDirect(a);
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
 
   Future<List<Appointment>> _appointmentsOrEmpty(DateTime day) async {
     try {
@@ -436,6 +656,9 @@ class BookingService extends ChangeNotifier {
     final appts = await _appointmentsOrEmpty(day);
     final blocks = await _blocks(day);
     final eb = _empBlocksOf((await _db.doc('roomDays/${_dayKey(day)}').get()).data());
+    final deviceHolds = service.usesDevice
+        ? await _loadDeviceHoldsAround(_d0(day).add(const Duration(hours: 12)), service.deviceHoldHours + 12)
+        : const <DeviceHold>[];
     bool personOk(DateTime t) {
       final e = t.add(service.duration);
       return _genericCovers(fl, t, e) || _freePeople(fl, t, e, eb, appts, excludeId: excludeId).isNotEmpty;
@@ -448,12 +671,12 @@ class BookingService extends ChangeNotifier {
     for (final f in fasce) {
       for (var t = d.add(Duration(minutes: f.$1)); !t.add(service.duration).isAfter(d.add(Duration(minutes: f.$2))); t = t.add(slotStep)) {
         final isKeep = keep != null && t == keep;
-        if ((t.isAfter(now) || isKeep) && _slotOk(service, t, t.add(service.duration), appts, blocks, busy, excludeId: excludeId) && (isKeep || personOk(t))) out.add(t);
+        if ((t.isAfter(now) || isKeep) && _slotOk(service, t, t.add(service.duration), appts, blocks, busy, excludeId: excludeId, deviceHolds: deviceHolds) && (isKeep || personOk(t))) out.add(t);
       }
     }
     if (keep != null && _d0(keep) == d && !out.contains(keep)) {
       // in modifica lo slot attuale resta selezionabile anche se fuori disponibilità
-      if (_slotOk(service, keep, keep.add(service.duration), appts, blocks, busy, excludeId: excludeId)) out.add(keep);
+      if (_slotOk(service, keep, keep.add(service.duration), appts, blocks, busy, excludeId: excludeId, deviceHolds: deviceHolds)) out.add(keep);
     }
     return out.toList()..sort();
   }
@@ -499,18 +722,24 @@ class BookingService extends ChangeNotifier {
     final busy = await _busy(start);
     final roomId = _pickRoom(service, start, end, appts, blocks, busy);
     if (roomId == null) throw StateError('Nessuna stanza libera in questo orario');
+    await _ensureDeviceFree(service, start);
     final mail = (email == null || email.trim().isEmpty) ? null : email.trim().toLowerCase();
     final clienteUid = await _customerUid();
     final ref = _appts.doc();
     final metodo = (metodoPagamento == null || metodoPagamento.trim().isEmpty) ? null : metodoPagamento.trim().toLowerCase();
     final paid = pagato || metodo == 'carta' || metodo == 'bancomat';
+    final devId = service.usesDevice ? service.deviceId : null;
+    final devHours = service.usesDevice ? service.deviceHoldHours : null;
     var a = Appointment(id: ref.id, service: service, start: start, customerName: name, phone: phone, email: mail, codiceFiscale: cf,
-        clienteUid: clienteUid, createdBy: _auth.currentUser?.uid, esenzione: esenzione, ricettaNumero: ricettaNumero, ricettaNote: ricettaNote, ricettaFoto: ricettaFotoB64 != null, pagato: paid, metodoPagamento: paid ? metodo : null, employeeId: empId, employeeNome: empNome, roomId: roomId);
+        clienteUid: clienteUid, createdBy: _auth.currentUser?.uid, esenzione: esenzione, ricettaNumero: ricettaNumero, ricettaNote: ricettaNote, ricettaFoto: ricettaFotoB64 != null, pagato: paid, metodoPagamento: paid ? metodo : null, employeeId: empId, employeeNome: empNome, roomId: roomId, deviceId: devId, deviceHoldHours: devHours);
     final dayKey = _dayKey(start);
     final assignment = _db.collection('notifications').doc();
+    final deviceDays = service.usesDevice ? daysOverlappingHold(start, service.deviceHoldEnd(start)) : const <DateTime>[];
+    try {
     await _db.runTransaction((tx) async {
       final lock = _db.doc('roomDays/$dayKey');
       final lockSnap = await tx.get(lock);
+      final deviceSnaps = service.usesDevice ? await _txDeviceDaySnaps(tx, deviceDays) : const <DocumentSnapshot<Map<String, dynamic>>>[];
       final existing = _blocksOf(lockSnap.data());
       if (empId != null && _personBusy(empId, start, end, _empBlocksOf(lockSnap.data()), const [])) {
         throw StateError('${empNome ?? 'La persona'} ha già una prenotazione in questo orario');
@@ -529,13 +758,20 @@ class BookingService extends ChangeNotifier {
         }
       }
       if (chosen == null) throw StateError('Nessuna stanza libera in questo orario');
+      if (service.usesDevice) _assertDeviceFreeTx(service, start, _holdsFromSnaps(deviceSnaps));
       final nextBlocks = <String, dynamic>{};
       final current = lockSnap.data()?['blocks'];
       if (current is Map) current.forEach((key, value) => nextBlocks[key.toString()] = value);
       nextBlocks[ref.id] = _blockMap(start, end, AppointmentStatus.inAttesa.name, chosen, empId);
       a = Appointment(id: ref.id, service: service, start: start, customerName: name, phone: phone, email: mail, codiceFiscale: cf,
-          clienteUid: clienteUid, createdBy: _auth.currentUser?.uid, esenzione: esenzione, ricettaNumero: ricettaNumero, ricettaNote: ricettaNote, ricettaFoto: ricettaFotoB64 != null, pagato: paid, metodoPagamento: paid ? metodo : null, employeeId: empId, employeeNome: empNome, roomId: chosen);
+          clienteUid: clienteUid, createdBy: _auth.currentUser?.uid, esenzione: esenzione, ricettaNumero: ricettaNumero, ricettaNote: ricettaNote, ricettaFoto: ricettaFotoB64 != null, pagato: paid, metodoPagamento: paid ? metodo : null, employeeId: empId, employeeNome: empNome, roomId: chosen, deviceId: devId, deviceHoldHours: devHours);
       tx.set(lock, {'touched': FieldValue.serverTimestamp(), 'blocks': nextBlocks}, SetOptions(merge: true));
+      if (service.usesDevice) {
+        final holdEnd = service.deviceHoldEnd(start);
+        for (final snap in deviceSnaps) {
+          _putHold(tx, snap, ref.id, service.deviceId, start, holdEnd, AppointmentStatus.inAttesa.name);
+        }
+      }
       tx.set(ref, a.toMap());
       if ((empId ?? '').isNotEmpty) _writeAssignment(tx, assignment, ref.id, service, start, empId!);
       // Notifica staff/admin: stesso id dell'appuntamento, scritta nella stessa transazione.
@@ -551,6 +787,9 @@ class BookingService extends ChangeNotifier {
         tx.set(_db.doc('ricette/${ref.id}'), {'foto': ricettaFotoB64, 'createdBy': _auth.currentUser?.uid, 'createdAt': FieldValue.serverTimestamp()});
       }
     });
+    } on _DeviceBusyInTx {
+      throw await _deviceUnavailable(service, start);
+    }
     if (clienteUid != null) {
       try {
         await _db.doc('customers/$clienteUid').set({
@@ -567,7 +806,17 @@ class BookingService extends ChangeNotifier {
     if (clash.isNotEmpty) {
       await ref.update({'status': AppointmentStatus.annullato.name});
       await _setBlockStatus(a, AppointmentStatus.annullato.name);
+      await _setDeviceHoldStatus(a, AppointmentStatus.annullato.name);
       throw StateError('Slot appena occupato da un\'altra prenotazione, scegline un altro');
+    }
+    if (service.usesDevice) {
+      final fresh = await _loadDeviceHoldsAround(start, service.deviceHoldHours);
+      if (!_deviceFree(service, start, fresh, excludeId: a.id)) {
+        await ref.update({'status': AppointmentStatus.annullato.name});
+        await _setBlockStatus(a, AppointmentStatus.annullato.name);
+        await _setDeviceHoldStatus(a, AppointmentStatus.annullato.name);
+        throw await _deviceUnavailable(service, start, excludeId: a.id);
+      }
     }
     if (calendar.isConnected) {
       try {
@@ -636,6 +885,7 @@ class BookingService extends ChangeNotifier {
     }
     await _appts.doc(a.id).update(upd);
     await _setBlockStatus(a, AppointmentStatus.annullato.name);
+    await _setDeviceHoldStatus(a, AppointmentStatus.annullato.name);
     if (a.calendarEventId != null && calendar.isConnected) {
       try { await calendar.deleteEvent(a.calendarEventId!); } catch (_) {}
     }
@@ -671,17 +921,24 @@ class BookingService extends ChangeNotifier {
     final end = start.add(a.end.difference(a.start));
     if (start == a.start) return a;
     await _checkAvailable(start, end, service);
+    await _ensureDeviceFree(service, start, excludeId: a.id);
     final (empId, empNome) = await _resolveEmployee(service, start, end, prefer: a.employeeId, preferNome: a.employeeNome, excludeId: a.id);
     final oldDay = _dayKey(a.start);
     final newDay = _dayKey(start);
     final dayChanged = oldDay != newDay;
     int roomId = a.roomId;
     final assignment = _db.collection('notifications').doc();
+    final oldDeviceDays = a.usesDevice ? daysOverlappingHold(a.start, a.deviceHoldEnd) : const <DateTime>[];
+    final newDeviceDays = service.usesDevice ? daysOverlappingHold(start, service.deviceHoldEnd(start)) : const <DateTime>[];
+    try {
     await _db.runTransaction((tx) async {
       final newLock = _db.doc('roomDays/$newDay');
       final oldLock = _db.doc('roomDays/$oldDay');
       final newSnap = await tx.get(newLock);
       final oldSnap = dayChanged ? await tx.get(oldLock) : null;
+      final deviceSnaps = (a.usesDevice || service.usesDevice)
+          ? await _txDeviceDaySnaps(tx, [...oldDeviceDays, ...newDeviceDays])
+          : const <DocumentSnapshot<Map<String, dynamic>>>[];
       final existing = _blocksOf(newSnap.data()).where((b) => b.$1 != a.id).toList();
       if (empId != null && _personBusy(empId, start, end, _empBlocksOf(newSnap.data()), const [], excludeId: a.id)) {
         throw StateError('${empNome ?? 'La persona'} ha già una prenotazione in questo orario');
@@ -692,6 +949,7 @@ class BookingService extends ChangeNotifier {
         if (!existing.any((b) => b.$5 == r && _blocksRoomStatus(b.$4) && _hits(start, end, b.$2, b.$3))) { chosen = r; break; }
       }
       if (chosen == null) throw StateError('Nessuna stanza libera in questo orario');
+      if (service.usesDevice) _assertDeviceFreeTx(service, start, _holdsFromSnaps(deviceSnaps), excludeId: a.id);
       roomId = chosen;
       final nextNew = <String, dynamic>{};
       final curNew = newSnap.data()?['blocks'];
@@ -705,6 +963,18 @@ class BookingService extends ChangeNotifier {
         nextOld.remove(a.id);
         tx.set(oldLock, {'touched': FieldValue.serverTimestamp(), 'blocks': nextOld}, SetOptions(merge: true));
       }
+      if (a.usesDevice || service.usesDevice) {
+        final oldKeys = {for (final d in oldDeviceDays) _dayKey(d)};
+        final newKeys = {for (final d in newDeviceDays) _dayKey(d)};
+        final holdEnd = service.deviceHoldEnd(start);
+        for (final snap in deviceSnaps) {
+          if (service.usesDevice && newKeys.contains(snap.id)) {
+            _putHold(tx, snap, a.id, service.deviceId, start, holdEnd, a.status.name);
+          } else if (oldKeys.contains(snap.id)) {
+            _dropHold(tx, snap, a.id);
+          }
+        }
+      }
       if (empId != a.employeeId && (empId ?? '').isNotEmpty) _writeAssignment(tx, assignment, a.id, service, start, empId!);
       tx.update(_appts.doc(a.id), {
         'start': Timestamp.fromDate(start),
@@ -713,11 +983,16 @@ class BookingService extends ChangeNotifier {
         'roomName': Room.registry[roomId]?.nome,
         'employeeId': empId,
         'employeeNome': empNome,
+        if (service.usesDevice) 'deviceId': service.deviceId,
+        if (service.usesDevice) 'deviceHoldHours': service.deviceHoldHours,
         'updatedBy': _auth.currentUser?.uid,
         'riprogrammatoDa': staff ? 'staff' : 'cliente',
         'riprogrammatoAt': FieldValue.serverTimestamp(),
       });
     });
+    } on _DeviceBusyInTx {
+      throw await _deviceUnavailable(service, start, excludeId: a.id);
+    }
     if (staff) {
       try {
         final n = await _db.doc('notifications/${a.id}').get();
@@ -905,9 +1180,20 @@ class BookingService extends ChangeNotifier {
     final oldDay = _dayKey(a.start);
     final newDay = _dayKey(start);
     final dayChanged = oldDay != newDay;
+    final cancelled = a.status == AppointmentStatus.annullato;
+    final newUsesDevice = service.usesDevice && !cancelled;
+    final oldDeviceDays = a.usesDevice ? daysOverlappingHold(a.start, a.deviceHoldEnd) : const <DateTime>[];
+    final newDeviceDays = newUsesDevice ? daysOverlappingHold(start, service.deviceHoldEnd(start)) : const <DateTime>[];
+    final deviceHoldChanged = !cancelled && (scheduleChanged
+        || a.effectiveDeviceId != (service.usesDevice ? service.deviceId : '')
+        || a.effectiveHoldHours != (service.usesDevice ? service.deviceHoldHours : 0));
+    if (newUsesDevice && deviceHoldChanged) {
+      await _ensureDeviceFree(service, start, excludeId: a.id);
+    }
 
     final customer = await _linkedCustomer(a);
     final corrections = _customerCorrections(a, nome, tel, mail);
+    try {
     await _db.runTransaction((tx) async {
       final customerDoc = customer == null ? null : await tx.get(customer);
       final notification = await tx.get(_db.doc('notifications/${a.id}'));
@@ -919,6 +1205,12 @@ class BookingService extends ChangeNotifier {
       if ((scheduleChanged || personChanged) && a.blocksRoom) {
         newSnap = await tx.get(newLock);
         if (dayChanged) oldSnap = await tx.get(oldLock);
+      }
+      final deviceSnaps = deviceHoldChanged
+          ? await _txDeviceDaySnaps(tx, [...oldDeviceDays, ...newDeviceDays])
+          : const <DocumentSnapshot<Map<String, dynamic>>>[];
+      if (newUsesDevice && deviceHoldChanged) {
+        _assertDeviceFreeTx(service, start, _holdsFromSnaps(deviceSnaps), excludeId: a.id);
       }
 
       if (empId != null && a.blocksRoom && _personBusy(empId, start, end, _empBlocksOf(newSnap?.data()), const [], excludeId: a.id)) {
@@ -980,6 +1272,8 @@ class BookingService extends ChangeNotifier {
         'employeeNome': empNome,
         'roomId': roomId,
         'roomName': Room.registry[roomId]?.nome,
+        'deviceId': newUsesDevice ? service.deviceId : null,
+        'deviceHoldHours': newUsesDevice ? service.deviceHoldHours : null,
         'updatedBy': _auth.currentUser?.uid,
         'updatedAt': FieldValue.serverTimestamp(),
       };
@@ -989,6 +1283,18 @@ class BookingService extends ChangeNotifier {
       } else {
         upd['ricettaNumero'] = null;
         upd['ricettaNote'] = null;
+      }
+      if (deviceHoldChanged) {
+        final oldKeys = {for (final d in oldDeviceDays) _dayKey(d)};
+        final newKeys = {for (final d in newDeviceDays) _dayKey(d)};
+        final holdEnd = service.deviceHoldEnd(start);
+        for (final snap in deviceSnaps) {
+          if (newUsesDevice && newKeys.contains(snap.id)) {
+            _putHold(tx, snap, a.id, service.deviceId, start, holdEnd, a.status.name);
+          } else if (oldKeys.contains(snap.id)) {
+            _dropHold(tx, snap, a.id);
+          }
+        }
       }
       tx.update(_appts.doc(a.id), upd);
       if (personChanged && (empId ?? '').isNotEmpty) _writeAssignment(tx, assignment, a.id, service, start, empId!);
@@ -1007,6 +1313,9 @@ class BookingService extends ChangeNotifier {
         });
       }
     });
+    } on _DeviceBusyInTx {
+      throw await _deviceUnavailable(service, start, excludeId: a.id);
+    }
 
     var calendarEventId = a.calendarEventId;
     if ((scheduleChanged || personChanged) && calendar.isConnected && a.blocksRoom) {
@@ -1042,6 +1351,8 @@ class BookingService extends ChangeNotifier {
       clienteAccount: a.clienteAccount,
       codiceFiscale: cf,
       roomId: roomId,
+      deviceId: newUsesDevice ? service.deviceId : null,
+      deviceHoldHours: newUsesDevice ? service.deviceHoldHours : null,
     );
   }
 

@@ -65,6 +65,8 @@ class _BackofficeState extends State<_BackofficeBody> {
     super.initState();
     bookingService.seedServicesIfEmpty().catchError((_) {});
     Room.seedIfEmpty().catchError((_) {});
+    Device.seedIfEmpty().catchError((_) {});
+    bookingService.seedHolterDevice().catchError((_) {});
     bookingService.settings().then((s) => setState(() {
           _s = s;
           _note.text = s.serviziNote;
@@ -123,6 +125,7 @@ class _BackofficeState extends State<_BackofficeBody> {
                           if (s.prezzo != null) s.scontato ? '${euro(s.prezzo!)} → ${euro(s.prezzoScontato!)}' : euro(s.prezzo!),
                           s.giorni.isEmpty ? 'tutti i giorni' : (s.giorni.toList()..sort()).map((d) => _giorni[d - 1]).join(', '),
                           s.stanzeLabel,
+                          if (s.usesDevice) '${s.deviceLabel} · ${s.deviceHoldHours} h',
                           if (s.dipendenteNome.isNotEmpty) s.dipendenteNome,
                         ].join(' · ')),
                         trailing: const Icon(Icons.edit),
@@ -156,6 +159,9 @@ class _BackofficeState extends State<_BackofficeBody> {
               const Divider(height: 32),
               Text('Stanze', style: t),
               const _RoomsSection(),
+              const Divider(height: 32),
+              Text('Apparecchi', style: t),
+              const _DevicesSection(),
               const Divider(height: 32),
               Text('Dipendenti', style: t),
               ListTile(leading: const Icon(Icons.assignment_ind, color: Color(0xFF32448C)), title: const Text('Assegnazioni'),
@@ -209,6 +215,20 @@ class _ServiceDialogState extends State<_ServiceDialog> {
   late bool _dedicati = widget.service?.giorni.isNotEmpty ?? false;
   late final Set<int> _giorniSel = {...?widget.service?.giorni};
   late final Set<int> _stanzeSel = {...(widget.service?.stanzeOrdinate ?? const [kStanza1])};
+  late final _deviceNome = TextEditingController(text: () {
+    final s = widget.service;
+    if (s == null) return '';
+    if (s.deviceId.isNotEmpty) return Device.label(s.deviceId);
+    return Device.inferredId(s.name) != null ? Device.label(Device.holterId) : '';
+  }());
+  late final _deviceQty = TextEditingController(text: '${widget.service != null && widget.service!.deviceId.isNotEmpty ? Device.quantityOf(widget.service!.deviceId) : 1}');
+  late final _deviceHours = TextEditingController(text: () {
+    final s = widget.service;
+    if (s == null) return '';
+    if (s.deviceHoldHours > 0) return '${s.deviceHoldHours}';
+    final h = Device.inferredHours(s.name);
+    return h > 0 ? '$h' : '';
+  }());
   late String _dipId = widget.service?.dipendenteId ?? '';
 
   static String _fmt(double? v) => v == null ? '' : v.toStringAsFixed(2).replaceAll('.', ',');
@@ -232,12 +252,44 @@ class _ServiceDialogState extends State<_ServiceDialog> {
     final nav = Navigator.of(context);
     final m = ScaffoldMessenger.of(context);
     final old = widget.service;
+    final devName = _deviceNome.text.trim();
+    var deviceId = '';
+    var deviceHoldHours = 0;
+    if (devName.isNotEmpty) {
+      deviceHoldHours = int.tryParse(_deviceHours.text.trim()) ?? 0;
+      if (deviceHoldHours < 1 || deviceHoldHours > 168) {
+        m.showSnackBar(const SnackBar(content: Text('Indica per quante ore resta occupato l\'apparecchio (1–168)')));
+        return;
+      }
+      final qty = int.tryParse(_deviceQty.text.trim()) ?? 0;
+      if (qty < 1 || qty > 99) {
+        m.showSnackBar(const SnackBar(content: Text('Pezzi disponibili: intero tra 1 e 99')));
+        return;
+      }
+      Device? existing;
+      final curId = old?.deviceId ?? '';
+      if (curId.isNotEmpty && Device.registry[curId]?.nome.toLowerCase() == devName.toLowerCase()) {
+        existing = Device.registry[curId];
+      } else {
+        for (final d in Device.registry.values) {
+          if (d.nome.toLowerCase() == devName.toLowerCase()) { existing = d; break; }
+        }
+      }
+      final dev = Device(id: existing?.id ?? Device.slug(devName), nome: devName, quantita: qty, attivo: existing?.attivo ?? true);
+      try {
+        await Device.save(dev);
+      } catch (e) {
+        m.showSnackBar(SnackBar(content: Text('Salvataggio apparecchio non riuscito: $e')));
+        return;
+      }
+      deviceId = dev.id;
+    }
     final s = ServiceType(
       id: old?.id ?? _slug(_nome.text),
       name: _nome.text.trim(), description: _desc.text.trim(), duration: Duration(minutes: int.parse(_durata.text.trim())),
       attivo: _attivo, prezzo: _parse(_prezzo.text), prezzoScontato: _parse(_sconto.text),
       giorni: _dedicati ? _giorniSel : const {}, dipendenteId: _dipId, dipendenteNome: _persona.text.trim(), ordine: old?.ordine ?? widget.nextOrder,
-      stanze: {..._stanzeSel},
+      stanze: {..._stanzeSel}, deviceId: deviceId, deviceHoldHours: deviceHoldHours,
     );
     try {
       await bookingService.saveService(s);
@@ -294,6 +346,17 @@ class _ServiceDialogState extends State<_ServiceDialog> {
               for (final r in Room.ordered)
                 FilterChip(label: Text('${r.nome} (P${r.priorita})'), selected: _stanzeSel.contains(r.id),
                     onSelected: (on) => setState(() => on ? _stanzeSel.add(r.id) : _stanzeSel.remove(r.id))),
+            ]),
+            const Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('Apparecchio (opzionale)', style: TextStyle(fontWeight: FontWeight.w600))),
+            const Text('Se il servizio usa uno strumento che resta addosso al paziente, indica nome, pezzi e per quante ore resta occupato. Più servizi possono condividere lo stesso apparecchio (es. Holter cardiaco e pressorio).',
+                style: TextStyle(fontSize: 12, color: Colors.black54)),
+            TextFormField(controller: _deviceNome, decoration: const InputDecoration(labelText: 'Apparecchio', hintText: 'es. Holter')),
+            Row(children: [
+              Expanded(child: TextFormField(controller: _deviceQty, keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Pezzi disponibili', hintText: '1'))),
+              const SizedBox(width: 12),
+              Expanded(child: TextFormField(controller: _deviceHours, keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Occupato per (ore)', hintText: 'es. 24'))),
             ]),
             SwitchListTile(contentPadding: EdgeInsets.zero, activeThumbColor: Brand.green, title: const Text('Solo in giorni dedicati'),
                 value: _dedicati, onChanged: (v) => setState(() => _dedicati = v)),
@@ -356,6 +419,7 @@ class _RoomsSection extends StatelessWidget {
       ],
     )));
     if (ok != true || nome.text.trim().isEmpty) return;
+    if (!context.mounted) return;
     final m = ScaffoldMessenger.of(context);
     try {
       await Room.save(Room(id: r?.id ?? Room.nextId(), nome: nome.text.trim(), priorita: int.tryParse(prio.text.trim()) ?? 99, attivo: attivo));
@@ -398,6 +462,81 @@ class _RoomsSection extends StatelessWidget {
                 trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => _delete(context, r)),
               )),
             TextButton.icon(onPressed: () => _edit(context, null), icon: const Icon(Icons.add), label: const Text('Aggiungi stanza')),
+          ]);
+        },
+      );
+}
+
+
+class _DevicesSection extends StatelessWidget {
+  const _DevicesSection();
+
+  Future<void> _edit(BuildContext context, Device? d) async {
+    final nome = TextEditingController(text: d?.nome ?? '');
+    final qty = TextEditingController(text: '${d?.quantita ?? 1}');
+    var attivo = d?.attivo ?? true;
+    final ok = await showDialog<bool>(context: context, builder: (c) => StatefulBuilder(builder: (c, set) => AlertDialog(
+      title: Text(d == null ? 'Nuovo apparecchio' : 'Modifica apparecchio'),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: nome, decoration: const InputDecoration(labelText: 'Nome', hintText: 'es. Holter')),
+        TextField(controller: qty, keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'Pezzi disponibili', helperText: 'quanti ne ha la farmacia')),
+        SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Attivo'), value: attivo, onChanged: (v) => set(() => attivo = v)),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annulla')),
+        FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Salva')),
+      ],
+    )));
+    if (ok != true || nome.text.trim().isEmpty) return;
+    if (!context.mounted) return;
+    final m = ScaffoldMessenger.of(context);
+    final n = int.tryParse(qty.text.trim()) ?? 0;
+    if (n < 1 || n > 99) {
+      m.showSnackBar(const SnackBar(content: Text('Pezzi disponibili: intero tra 1 e 99')));
+      return;
+    }
+    try {
+      await Device.save(Device(id: d?.id ?? Device.slug(nome.text.trim()), nome: nome.text.trim(), quantita: n, attivo: attivo));
+    } catch (e) { m.showSnackBar(SnackBar(content: Text('Errore: $e'))); }
+  }
+
+  Future<void> _delete(BuildContext context, Device d) async {
+    final m = ScaffoldMessenger.of(context);
+    final users = ServiceType.registry.values.where((s) => s.deviceId == d.id).map((s) => s.name).toList();
+    if (users.isNotEmpty) {
+      m.showSnackBar(SnackBar(content: Text('Impossibile eliminare: usato da ${users.join(', ')}. Toglilo prima dai servizi.')));
+      return;
+    }
+    final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(
+      title: Text('Eliminare ${d.nome}?'),
+      content: const Text('I servizi non resteranno collegati a questo apparecchio.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('No')),
+        FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Elimina')),
+      ],
+    ));
+    if (ok == true) {
+      try { await Device.delete(d.id); } catch (e) { m.showSnackBar(SnackBar(content: Text('Errore: $e'))); }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => StreamBuilder<List<Device>>(
+        stream: Device.watch(),
+        builder: (context, snap) {
+          final list = snap.data ?? (Device.registry.values.toList()..sort((a, b) => a.nome.compareTo(b.nome)));
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Gli apparecchi si possono anche impostare dal singolo servizio. La quantità è condivisa.', style: TextStyle(fontSize: 12, color: Colors.black54)),
+            for (final d in list)
+              Card(child: ListTile(
+                leading: const Icon(Icons.watch),
+                title: Text(d.nome),
+                subtitle: Text('${d.quantita} ${d.quantita == 1 ? 'pezzo' : 'pezzi'}${d.attivo ? '' : ' · disattivato'}'),
+                onTap: () => _edit(context, d),
+                trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => _delete(context, d)),
+              )),
+            TextButton.icon(onPressed: () => _edit(context, null), icon: const Icon(Icons.add), label: const Text('Aggiungi apparecchio')),
           ]);
         },
       );

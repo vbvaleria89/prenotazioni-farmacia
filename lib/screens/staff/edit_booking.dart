@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../widgets/device_unavailable_dialog.dart';
 import '../../app.dart';
 import '../../models/appointment.dart';
 import '../../models/codice_fiscale.dart';
@@ -164,6 +165,8 @@ class _EditBookingPageState extends State<EditBookingPage> {
       if (!mounted) return;
       m.showSnackBar(SnackBar(content: Text(widget.customerOnly ? 'Dati cliente aggiornati' : 'Prenotazione aggiornata')));
       Navigator.pop(context, true);
+    } on DeviceUnavailableException catch (e) {
+      if (mounted) await showDeviceUnavailableDialog(context, e);
     } on StateError catch (e) {
       m.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
