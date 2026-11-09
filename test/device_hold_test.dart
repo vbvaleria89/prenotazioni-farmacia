@@ -106,4 +106,46 @@ void main() {
     final days = daysOverlappingHold(booked, booked.add(const Duration(hours: 24)));
     expect(days, [DateTime(2026, 11, 9), DateTime(2026, 11, 10)]);
   });
+
+  test('inferenza: cardiaco e pressorio sono apparecchi distinti', () {
+    expect(Device.inferredId('Holter Cardiaco', id: 'holter'), Device.holterId);
+    expect(Device.inferredId('Holter', id: 'holter'), Device.holterId);
+    expect(Device.inferredId('Holter Pressorio', id: 'holter-pressorio'), Device.holterPressorioId);
+    expect(Device.inferredId('Holter pressorio', id: 'altro'), Device.holterPressorioId);
+    expect(Device.inferredId('Holter', id: 'holter-pressorio'), Device.holterPressorioId);
+    expect(Device.inferredId('Analisi'), isNull);
+  });
+
+  test('prenotare il cardiaco non blocca il pressorio (e viceversa)', () {
+    final cardioStart = DateTime(2026, 11, 9, 16);
+    final cardio = DeviceHold(
+      appointmentId: 'c1',
+      deviceId: Device.holterId,
+      start: cardioStart,
+      holdEnd: cardioStart.add(const Duration(hours: 24)),
+    );
+    final pressorioStart = DateTime(2026, 11, 9, 16, 30);
+    final nPressorio = countOverlappingDeviceHolds(
+      deviceId: Device.holterPressorioId,
+      windowStart: pressorioStart,
+      windowEnd: pressorioStart.add(const Duration(hours: 24)),
+      holds: [cardio],
+    );
+    expect(nPressorio, 0);
+    expect(isDeviceQuantityFree(quantity: 1, overlapping: nPressorio), isTrue);
+
+    final pressorio = DeviceHold(
+      appointmentId: 'p1',
+      deviceId: Device.holterPressorioId,
+      start: pressorioStart,
+      holdEnd: pressorioStart.add(const Duration(hours: 24)),
+    );
+    final nCardio = countOverlappingDeviceHolds(
+      deviceId: Device.holterId,
+      windowStart: cardioStart,
+      windowEnd: cardioStart.add(const Duration(hours: 24)),
+      holds: [pressorio],
+    );
+    expect(nCardio, 0);
+  });
 }

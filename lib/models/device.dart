@@ -131,6 +131,7 @@ class Device {
   const Device({required this.id, required this.nome, this.quantita = 1, this.attivo = true});
 
   static const holterId = 'holter';
+  static const holterPressorioId = 'holter-pressorio';
   static const holterDefaultHours = 24;
   static const holterDefaultQty = 1;
 
@@ -156,11 +157,20 @@ class Device {
     return b.isEmpty ? 'apparecchio-${DateTime.now().millisecondsSinceEpoch}' : b;
   }
 
-  /// Se il nome del servizio contiene "holter" (case-insensitive) e non ha ancora un apparecchio.
-  static String? inferredId(String name) => name.toLowerCase().contains('holter') ? holterId : null;
-  static int inferredHours(String name) => inferredId(name) == null ? 0 : holterDefaultHours;
+  /// Holter cardiaco e pressorio sono due apparecchi distinti (id/nome del servizio).
+  static String? inferredId(String name, {String? id}) {
+    final hay = '${id ?? ''} $name'.toLowerCase();
+    if (!hay.contains('holter')) return null;
+    if (hay.contains('pressor')) return holterPressorioId;
+    return holterId;
+  }
 
-  static const defaults = [Device(id: holterId, nome: 'Holter', quantita: holterDefaultQty)];
+  static int inferredHours(String name, {String? id}) => inferredId(name, id: id) == null ? 0 : holterDefaultHours;
+
+  static const defaults = [
+    Device(id: holterId, nome: 'Holter cardiaco', quantita: holterDefaultQty),
+    Device(id: holterPressorioId, nome: 'Holter pressorio', quantita: holterDefaultQty),
+  ];
 
   static final Map<String, Device> registry = {for (final d in defaults) d.id: d};
   static bool _seeded = false;
@@ -171,7 +181,7 @@ class Device {
       registry[id]?.nome ?? (fallback?.isNotEmpty == true ? fallback! : id);
 
   static int quantityOf(String id) {
-    final q = registry[id]?.quantita ?? (id == holterId ? holterDefaultQty : 1);
+    final q = registry[id]?.quantita ?? ((id == holterId || id == holterPressorioId) ? holterDefaultQty : 1);
     return q < 1 ? 1 : q;
   }
 
@@ -193,16 +203,19 @@ class Device {
     _sub ??= watch().listen((_) {}, onError: (_) {});
   }
 
-  /// Crea i default se la collection è vuota; assicura comunque l'Holter.
+  /// Assicura i due Holter distinti; rinomina il vecchio documento generico «Holter» in «Holter cardiaco».
   static Future<void> seedIfEmpty() async {
     if (_seeded) return;
-    final q = await _col.limit(1).get();
-    if (q.docs.isEmpty) {
-      for (final d in defaults) {
+    for (final d in defaults) {
+      final doc = await _col.doc(d.id).get();
+      if (!doc.exists) {
         await _col.doc(d.id).set(d.toMap());
+      } else if (d.id == holterId) {
+        final nome = (doc.data()?['nome'] ?? '').toString().trim();
+        if (nome.isEmpty || nome.toLowerCase() == 'holter') {
+          await _col.doc(d.id).set({'nome': d.nome, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+        }
       }
-    } else if (!(await _col.doc(holterId).get()).exists) {
-      await _col.doc(holterId).set(const Device(id: holterId, nome: 'Holter', quantita: holterDefaultQty).toMap());
     }
     _seeded = true;
   }

@@ -58,17 +58,20 @@ class ServiceType {
   DateTime deviceHoldEnd(DateTime start) => start.add(Duration(hours: deviceHoldHours));
   String get deviceLabel => usesDevice ? Device.label(deviceId) : '';
 
-  static String _parseDeviceId(Map<String, dynamic> m, String name) {
+  static String _parseDeviceId(Map<String, dynamic> m, String name, String id) {
     final raw = (m['deviceId'] ?? '').toString().trim();
+    final inferred = Device.inferredId(name, id: id);
+    // Corregge il seed precedente che collegava il pressorio all'apparecchio cardiaco.
+    if (inferred == Device.holterPressorioId && (raw.isEmpty || raw == Device.holterId)) return Device.holterPressorioId;
     if (raw.isNotEmpty) return raw;
-    return Device.inferredId(name) ?? '';
+    return inferred ?? '';
   }
 
-  static int _parseHoldHours(Map<String, dynamic> m, String name) {
+  static int _parseHoldHours(Map<String, dynamic> m, String name, String id) {
     final n = (m['deviceHoldHours'] as num?)?.toInt() ?? 0;
     if (n > 0) return n;
     if ((m['deviceId'] ?? '').toString().trim().isNotEmpty) return Device.holterDefaultHours;
-    return Device.inferredHours(name);
+    return Device.inferredHours(name, id: id);
   }
 
   static double? _num(dynamic v) => v is num ? v.toDouble() : null;
@@ -96,8 +99,8 @@ class ServiceType {
         dipendenteNome: (m['dipendenteNome'] ?? '') as String,
         ordine: (m['ordine'] as num? ?? 0).toInt(),
         stanze: _parseStanze(m['stanze']),
-        deviceId: _parseDeviceId(m, (m['nome'] ?? id) as String),
-        deviceHoldHours: _parseHoldHours(m, (m['nome'] ?? id) as String),
+        deviceId: _parseDeviceId(m, (m['nome'] ?? id) as String, id),
+        deviceHoldHours: _parseHoldHours(m, (m['nome'] ?? id) as String, id),
       );
 
   factory ServiceType.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) => ServiceType.fromMap(d.id, d.data() ?? {});
@@ -123,8 +126,8 @@ class ServiceType {
       name: name,
       description: '',
       duration: Duration(minutes: durataMin ?? 15),
-      deviceId: Device.inferredId(name) ?? '',
-      deviceHoldHours: Device.inferredHours(name),
+      deviceId: Device.inferredId(name, id: id) ?? '',
+      deviceHoldHours: Device.inferredHours(name, id: id),
     );
   }
 }
@@ -134,6 +137,7 @@ String euro(double v) => '€ ${v.toStringAsFixed(2).replaceAll('.', ',')}';
 // Seed iniziale (usato solo se la collezione `services` è vuota). NO Otopharma. Default Stanza 1.
 const mockServices = [
   ServiceType(id: 'tricologico', name: 'Analisi tricologica', description: 'Check-up di capelli e cuoio capelluto', duration: Duration(minutes: 30), giorni: {2, 4}, ordine: 1, stanze: {kStanza1}),
-  ServiceType(id: 'holter', name: 'Holter', description: 'Applicazione Holter cardiaco/pressorio', duration: Duration(minutes: 20), ordine: 2, stanze: {kStanza1}, deviceId: Device.holterId, deviceHoldHours: Device.holterDefaultHours),
-  ServiceType(id: 'analisi', name: 'Analisi varie', description: 'Glicemia, colesterolo, ecc.', duration: Duration(minutes: 15), ordine: 3, stanze: {kStanza1}),
+  ServiceType(id: 'holter', name: 'Holter Cardiaco', description: 'Applicazione Holter cardiaco', duration: Duration(minutes: 20), ordine: 2, stanze: {kStanza1}, deviceId: Device.holterId, deviceHoldHours: Device.holterDefaultHours),
+  ServiceType(id: 'holter-pressorio', name: 'Holter Pressorio', description: 'Applicazione Holter pressorio', duration: Duration(minutes: 20), ordine: 3, stanze: {kStanza1}, deviceId: Device.holterPressorioId, deviceHoldHours: Device.holterDefaultHours),
+  ServiceType(id: 'analisi', name: 'Analisi varie', description: 'Glicemia, colesterolo, ecc.', duration: Duration(minutes: 15), ordine: 4, stanze: {kStanza1}),
 ];

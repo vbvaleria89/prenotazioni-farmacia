@@ -80,24 +80,79 @@ class BookingService extends ChangeNotifier {
     }
   }
 
-  /// Collega i servizi il cui nome contiene "holter" all'apparecchio Holter (1 pezzo, 24 ore) se i campi mancano.
+  /// Collega ogni servizio Holter al proprio apparecchio (cardiaco ≠ pressorio), 1 pezzo e 24 ore, se i campi mancano o sono lo slug condiviso precedente.
   Future<void> seedHolterDevice() async {
     await Device.seedIfEmpty();
     final q = await servicesRef.get();
     for (final d in q.docs) {
       final raw = d.data();
       final nome = (raw['nome'] ?? d.id).toString();
-      final inferred = Device.inferredId(nome);
+      final inferred = Device.inferredId(nome, id: d.id);
       if (inferred == null) continue;
       final rawId = (raw['deviceId'] ?? '').toString().trim();
       final rawHours = (raw['deviceHoldHours'] as num?)?.toInt() ?? 0;
-      if (rawId.isNotEmpty && rawHours > 0) continue;
+      final wrongShared = rawId.isNotEmpty && rawId != inferred
+          && (rawId == Device.holterId || rawId == Device.holterPressorioId);
+      if (rawId.isNotEmpty && rawHours > 0 && !wrongShared) continue;
       await servicesRef.doc(d.id).set({
-        'deviceId': rawId.isNotEmpty ? rawId : inferred,
+        'deviceId': inferred,
         'deviceHoldHours': rawHours > 0 ? rawHours : Device.holterDefaultHours,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
+  }
+
+  /// Sposta su `holter-pressorio` prenotazioni e hold che erano finiti sotto l'apparecchio cardiaco.
+  Future<void> _reassignPressorioDeviceHolds() async {
+    Future<String?> wantedFor(String serviceId, String serviceName, String deviceId) async {
+      final inferred = Device.inferredId(serviceName, id: serviceId);
+      if (inferred == Device.holterPressorioId && deviceId != inferred) return inferred;
+      return null;
+    }
+
+    try {
+      final byService = await _appts.where('servizio', isEqualTo: Device.holterPressorioId).get();
+      final byDevice = await _appts.where('deviceId', isEqualTo: Device.holterId).get();
+      final seen = <String>{};
+      for (final d in [...byService.docs, ...byDevice.docs]) {
+        if (!seen.add(d.id)) continue;
+        final m = d.data();
+        final want = await wantedFor((m['servizio'] ?? '').toString(), (m['servizioNome'] ?? '').toString(), (m['deviceId'] ?? '').toString());
+        if (want == null) continue;
+        await d.reference.set({'deviceId': want, 'deviceHoldHours': (m['deviceHoldHours'] as num?)?.toInt() ?? Device.holterDefaultHours, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      }
+    } catch (_) {}
+
+    try {
+      final days = await _db.collection('deviceDays').get();
+      for (final doc in days.docs) {
+        final raw = doc.data()['holds'];
+        if (raw is! Map) continue;
+        final next = <String, dynamic>{};
+        raw.forEach((k, v) => next[k.toString()] = v);
+        var changed = false;
+        for (final id in next.keys.toList()) {
+          final h = next[id];
+          if (h is! Map) continue;
+          final cur = (h['deviceId'] ?? '').toString();
+          if (cur != Device.holterId) continue;
+          String serviceId = '';
+          String serviceName = '';
+          try {
+            final ap = await _appts.doc(id).get();
+            serviceId = (ap.data()?['servizio'] ?? '').toString();
+            serviceName = (ap.data()?['servizioNome'] ?? '').toString();
+          } catch (_) {}
+          final want = Device.inferredId(serviceName, id: serviceId);
+          if (want != Device.holterPressorioId) continue;
+          next[id] = {...Map<String, dynamic>.from(h), 'deviceId': Device.holterPressorioId};
+          changed = true;
+        }
+        if (changed) {
+          await doc.reference.set({'holds': next, 'touched': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+        }
+      }
+    } catch (_) {}
   }
 
   // ---- Disponibilità giornaliere (collection `availability/{yyyy-mm-dd}`) ----
@@ -576,6 +631,7 @@ class BookingService extends ChangeNotifier {
   Future<void> backfillDeviceHolds({int daysBack = 2, int daysAhead = 21}) async {
     try {
       await seedHolterDevice();
+      await _reassignPressorioDeviceHolds();
     } catch (_) {}
     final today = _d0(DateTime.now());
     final from = today.subtract(Duration(days: daysBack + 2));

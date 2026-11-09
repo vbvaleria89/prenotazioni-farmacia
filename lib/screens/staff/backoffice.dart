@@ -219,14 +219,15 @@ class _ServiceDialogState extends State<_ServiceDialog> {
     final s = widget.service;
     if (s == null) return '';
     if (s.deviceId.isNotEmpty) return Device.label(s.deviceId);
-    return Device.inferredId(s.name) != null ? Device.label(Device.holterId) : '';
+    final inferred = Device.inferredId(s.name, id: s.id);
+    return inferred != null ? Device.label(inferred) : '';
   }());
   late final _deviceQty = TextEditingController(text: '${widget.service != null && widget.service!.deviceId.isNotEmpty ? Device.quantityOf(widget.service!.deviceId) : 1}');
   late final _deviceHours = TextEditingController(text: () {
     final s = widget.service;
     if (s == null) return '';
     if (s.deviceHoldHours > 0) return '${s.deviceHoldHours}';
-    final h = Device.inferredHours(s.name);
+    final h = Device.inferredHours(s.name, id: s.id);
     return h > 0 ? '$h' : '';
   }());
   late String _dipId = widget.service?.dipendenteId ?? '';
@@ -348,9 +349,9 @@ class _ServiceDialogState extends State<_ServiceDialog> {
                     onSelected: (on) => setState(() => on ? _stanzeSel.add(r.id) : _stanzeSel.remove(r.id))),
             ]),
             const Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('Apparecchio (opzionale)', style: TextStyle(fontWeight: FontWeight.w600))),
-            const Text('Se il servizio usa uno strumento che resta addosso al paziente, indica nome, pezzi e per quante ore resta occupato. Più servizi possono condividere lo stesso apparecchio (es. Holter cardiaco e pressorio).',
+            const Text('Se il servizio usa uno strumento che resta addosso al paziente, indica nome, pezzi e per quante ore resta occupato. Holter cardiaco e Holter pressorio sono due apparecchi distinti; altri servizi possono condividere lo stesso apparecchio se hanno lo stesso nome.',
                 style: TextStyle(fontSize: 12, color: Colors.black54)),
-            TextFormField(controller: _deviceNome, decoration: const InputDecoration(labelText: 'Apparecchio', hintText: 'es. Holter')),
+            TextFormField(controller: _deviceNome, decoration: const InputDecoration(labelText: 'Apparecchio', hintText: 'es. Holter cardiaco')),
             Row(children: [
               Expanded(child: TextFormField(controller: _deviceQty, keyboardType: TextInputType.number,
                   decoration: const InputDecoration(labelText: 'Pezzi disponibili', hintText: '1'))),
@@ -478,7 +479,7 @@ class _DevicesSection extends StatelessWidget {
     final ok = await showDialog<bool>(context: context, builder: (c) => StatefulBuilder(builder: (c, set) => AlertDialog(
       title: Text(d == null ? 'Nuovo apparecchio' : 'Modifica apparecchio'),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: nome, decoration: const InputDecoration(labelText: 'Nome', hintText: 'es. Holter')),
+        TextField(controller: nome, decoration: const InputDecoration(labelText: 'Nome', hintText: 'es. Holter cardiaco')),
         TextField(controller: qty, keyboardType: TextInputType.number,
             decoration: const InputDecoration(labelText: 'Pezzi disponibili', helperText: 'quanti ne ha la farmacia')),
         SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Attivo'), value: attivo, onChanged: (v) => set(() => attivo = v)),
