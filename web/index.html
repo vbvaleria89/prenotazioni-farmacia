@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <!-- build 2026-11-09-v47 -->
+  <!-- build 2026-11-09-v48 -->
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -36,7 +36,8 @@
   <title>Farmacia San Ciro dott.ri Guerra - Prenotazioni</title>
   <meta name="google-signin-client_id" content="444833221252-pivii37uqhrshlhtfq4a5i83kl5efef7.apps.googleusercontent.com">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="gcal.js?v=2026-11-09-v47"></script>
+  <script src="gcal.js?v=2026-11-09-v48"></script>
+  <script src="password_save.js?v=2026-11-09-v48"></script>
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
@@ -48,10 +49,17 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
+  <!-- Form nativo per i password manager (Flutter web non è un <form> HTML). Off-screen, non display:none. -->
+  <iframe id="farmacia-pw-sink" name="farmacia-pw-sink" title="password-save" src="password-save.html" aria-hidden="true" tabindex="-1" style="position:fixed;width:1px;height:1px;left:-9999px;top:0;border:0;opacity:0;pointer-events:none;"></iframe>
+  <form id="farmacia-native-login" method="post" action="password-save.html" target="farmacia-pw-sink" autocomplete="on" aria-hidden="true" style="position:fixed;left:-9999px;top:0;width:20px;height:20px;opacity:0;overflow:hidden;">
+    <input id="farmacia-native-username" type="email" name="username" autocomplete="username">
+    <input id="farmacia-native-password" type="password" name="password" autocomplete="current-password">
+    <input type="submit" value="Login" tabindex="-1">
+  </form>
   <script>
-  /* farmacia-kill-sw + build-bust 2026-11-09-v47 */
+  /* farmacia-kill-sw + build-bust 2026-11-09-v48 */
   (function () {
-    var BUILD = '2026-11-09-v47';
+    var BUILD = '2026-11-09-v48';
     var prev = null;
     try { prev = localStorage.getItem('farmacia_build'); } catch (e) {}
     var changed = prev !== BUILD;
@@ -83,6 +91,6 @@
     }).then(finish).catch(finish);
   })();
   </script>
-  <script src="flutter_bootstrap.js?v=2026-11-09-v47" async></script>
+  <script src="flutter_bootstrap.js?v=2026-11-09-v48" async></script>
 </body>
 </html>

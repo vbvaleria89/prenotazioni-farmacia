@@ -4,6 +4,7 @@ import '../../app.dart';
 import '../../theme/brand.dart';
 import 'staff_hub.dart';
 import '../../widgets/auth_login_form.dart';
+import '../../services/password_save.dart';
 
 class StaffLogin extends StatefulWidget {
   const StaffLogin({super.key});
@@ -18,6 +19,20 @@ class _StaffLoginState extends State<StaffLogin> {
   String? _err;
 
   @override
+  void initState() {
+    super.initState();
+    _prefillSavedPassword();
+  }
+
+  Future<void> _prefillSavedPassword() async {
+    final saved = await getSavedBrowserPassword();
+    if (!mounted || saved == null) return;
+    if (_email.text.trim().isEmpty) _email.text = saved.email;
+    if (_pass.text.isEmpty) _pass.text = saved.password;
+    setState(() {});
+  }
+
+  @override
   void dispose() {
     _email.dispose();
     _pass.dispose();
@@ -27,7 +42,10 @@ class _StaffLoginState extends State<StaffLogin> {
   Future<void> _login() async {
     setState(() { _busy = true; _err = null; });
     try {
-      final e = await staffAuth.signIn(_email.text.trim(), _pass.text);
+      final email = _email.text.trim();
+      final password = _pass.text;
+      final e = await staffAuth.signIn(email, password);
+      await storeBrowserPassword(email, password);
       AuthLoginForm.markSaved();
       if (!mounted) return;
       Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => StaffHub(employee: e)), (route) => false);

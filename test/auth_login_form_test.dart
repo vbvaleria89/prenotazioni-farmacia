@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:farmacia_prenotazioni/widgets/auth_login_form.dart';
+import 'package:farmacia_prenotazioni/services/password_save.dart';
 import 'package:farmacia_prenotazioni/widgets/staff_idle_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -77,6 +78,11 @@ void main() {
     fire(const Duration(minutes: 40));
     expect(logouts, 1);
     c.dispose();
+  });
+
+  test('storeBrowserPassword sul VM non fa nulla (solo web)', () async {
+    expect(await storeBrowserPassword('a@b.it', 'x'), isFalse);
+    expect(await getSavedBrowserPassword(), isNull);
   });
 }
 

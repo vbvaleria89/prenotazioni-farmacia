@@ -6,6 +6,7 @@ import '../../theme/brand.dart';
 import '../staff/staff_hub.dart';
 import 'my_bookings.dart';
 import '../../widgets/auth_login_form.dart';
+import '../../services/password_save.dart';
 
 /// Apre il login oppure, se la sessione c'è già, l'area giusta (cliente o staff).
 Future<void> openPersonalArea(BuildContext context) async {
@@ -58,6 +59,13 @@ class _CustomerLoginState extends State<CustomerLogin> {
     super.dispose();
   }
 
+  Future<void> _prefillSavedPassword() async {
+    final saved = await getSavedBrowserPassword();
+    if (!mounted || saved == null) return;
+    if (_email.text.trim().isEmpty) _email.text = saved.email;
+    if (_pass.text.isEmpty) _pass.text = saved.password;
+  }
+
   Future<void> _resumeIfSignedIn() async {
     try {
       final user = await customerAuth.restoredUser();
@@ -74,13 +82,17 @@ class _CustomerLoginState extends State<CustomerLogin> {
         return;
       }
     } catch (_) {}
+    await _prefillSavedPassword();
     if (mounted) setState(() => _checking = false);
   }
 
   Future<void> _login() async {
     setState(() { _busy = true; _err = null; });
     try {
-      final session = await customerAuth.signIn(_email.text.trim(), _pass.text, staySignedIn: _staySignedIn);
+      final email = _email.text.trim();
+      final password = _pass.text;
+      final session = await customerAuth.signIn(email, password, staySignedIn: _staySignedIn);
+      await storeBrowserPassword(email, password);
       AuthLoginForm.markSaved();
       if (!mounted) return;
       final next = session.role == PersonalRole.staff && session.employee != null
