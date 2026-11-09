@@ -18,25 +18,34 @@ service cloud.firestore {
     match /services/{id} { allow read: if true; allow write: if isAdmin(); }
     // Servizi che ogni persona può erogare (solo id servizio; vuoto = tutti).
     match /staffServices/{uid} { allow read: if true; allow write: if isAdmin(); }
-    // Bacheca: i clienti leggono solo le voci attive; le scrive l'admin.
+    // Bacheca: i clienti leggono solo le voci attive.
+    // Novità/eventi: scrittura dipendente; tipo promo: solo admin (create/update/delete).
     match /notices/{id} {
+      function noticeFieldsOk() {
+        return request.resource.data.titolo is string
+          && request.resource.data.titolo.size() > 0
+          && request.resource.data.titolo.size() < 140
+          && request.resource.data.testo is string
+          && request.resource.data.testo.size() < 2000
+          && request.resource.data.tipo in ['novita', 'evento', 'promo']
+          && request.resource.data.attivo is bool
+          && request.resource.data.ordine is number
+          && request.resource.data.periodo in ['', 'settimana', 'mese']
+          && request.resource.data.imageUrl is string
+          && request.resource.data.imageUrl.size() < 450000
+          && (!('serviceId' in request.resource.data) || (request.resource.data.serviceId is string && request.resource.data.serviceId.size() < 100
+              && (request.resource.data.serviceId == '' || request.resource.data.tipo == 'evento')))
+          && (!('serviceName' in request.resource.data) || (request.resource.data.serviceName is string && request.resource.data.serviceName.size() < 120));
+      }
+      function canWriteNoticeTipo(tipo) {
+        return tipo == 'promo' ? isAdmin() : isEmployee();
+      }
       allow read: if isEmployee() || resource.data.attivo == true;
-      allow create, update: if isEmployee()
-        && request.resource.data.titolo is string
-        && request.resource.data.titolo.size() > 0
-        && request.resource.data.titolo.size() < 140
-        && request.resource.data.testo is string
-        && request.resource.data.testo.size() < 2000
-        && request.resource.data.tipo in ['novita', 'evento', 'promo']
-        && request.resource.data.attivo is bool
-        && request.resource.data.ordine is number
-        && request.resource.data.periodo in ['', 'settimana', 'mese']
-        && request.resource.data.imageUrl is string
-        && request.resource.data.imageUrl.size() < 450000
-        && (!('serviceId' in request.resource.data) || (request.resource.data.serviceId is string && request.resource.data.serviceId.size() < 100
-            && (request.resource.data.serviceId == '' || request.resource.data.tipo == 'evento')))
-        && (!('serviceName' in request.resource.data) || (request.resource.data.serviceName is string && request.resource.data.serviceName.size() < 120));
-      allow delete: if isEmployee();
+      allow create: if noticeFieldsOk() && canWriteNoticeTipo(request.resource.data.tipo);
+      allow update: if noticeFieldsOk()
+        && canWriteNoticeTipo(request.resource.data.tipo)
+        && canWriteNoticeTipo(resource.data.tipo);
+      allow delete: if canWriteNoticeTipo(resource.data.tipo);
     }
 
     // employees: nome stringa 1..99; email, ruolo e attivo non modificabili dal proprio account.

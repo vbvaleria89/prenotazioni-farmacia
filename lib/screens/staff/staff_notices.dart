@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../app.dart';
@@ -9,59 +11,88 @@ import '../../services/notice_service.dart';
 import '../../theme/brand.dart';
 import '../client/notice_image.dart';
 
-/// Bacheca novità, eventi e promo. Scrittura riservata all'admin dalle regole Firestore.
+Future<bool> _employeeIsAdmin() async {
+  final u = FirebaseAuth.instance.currentUser;
+  if (u == null || u.isAnonymous) return false;
+  try {
+    final d = await FirebaseFirestore.instance.doc('employees/${u.uid}').get();
+    final r = (d.data()?['ruolo'] ?? '').toString().trim().toLowerCase();
+    return d.exists && r == 'admin' && d.data()?['attivo'] != false;
+  } catch (e) {
+    debugPrint('_employeeIsAdmin: $e');
+    return false;
+  }
+}
+
+/// Bacheca novità, eventi e (solo admin) promo.
 class StaffNotices extends StatelessWidget {
   const StaffNotices({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: const BrandAppBar(subtitle: 'Bacheca'),
-      body: Column(children: [
-        Material(
-          color: Brand.primary,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-            child: SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Brand.primary, minimumSize: const Size.fromHeight(56)),
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NoticeEditor())),
-                icon: const Icon(Icons.add),
-                label: const Text('Aggiungi novità / promo / evento', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-              ),
-            ),
-          ),
-        ),
-        Expanded(child: StreamBuilder<List<Notice>>(
-        stream: noticeBoard.watchAll(),
-        builder: (context, snap) {
-          if (snap.hasError) return Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('Bacheca non disponibile: ${snap.error}', textAlign: TextAlign.center)));
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-          final list = snap.data!;
-          if (list.isEmpty) {
-            return const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('Nessuna novità, evento o promo.\nAggiungi la prima voce.', textAlign: TextAlign.center, style: TextStyle(fontSize: 18))));
-          }
-          return ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 32), children: [
-            for (final n in list)
-              Card(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  leading: n.imageUrl.isEmpty
-                      ? CircleAvatar(backgroundColor: Brand.primary.withValues(alpha: 0.1), child: Icon(_icon(n.tipo), color: Brand.primary))
-                      : ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 56, height: 56, child: NoticeImage(n.imageUrl))),
-                  title: Text(n.titolo, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
-                  subtitle: Text('${n.tipoLabel}${n.attivo ? '' : ' · non in bacheca'} · ordine ${n.ordine}'),
-                  trailing: const Icon(Icons.edit, color: Brand.primary),
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => NoticeEditor(notice: n))),
+    return FutureBuilder<bool>(
+      future: _employeeIsAdmin(),
+      builder: (context, adminSnap) {
+        final isAdmin = adminSnap.data == true;
+        final addLabel = isAdmin ? 'Aggiungi novità / promo / evento' : 'Aggiungi novità / evento';
+        final emptyLabel = isAdmin
+            ? 'Nessuna novità, evento o promo.\nAggiungi la prima voce.'
+            : 'Nessuna novità o evento.\nAggiungi la prima voce.';
+        return Scaffold(
+          appBar: const BrandAppBar(subtitle: 'Bacheca'),
+          body: Column(children: [
+            Material(
+              color: Brand.primary,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Brand.primary, minimumSize: const Size.fromHeight(56)),
+                    onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NoticeEditor())),
+                    icon: const Icon(Icons.add),
+                    label: Text(addLabel, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                  ),
                 ),
               ),
-          ]);
-        },
-      )),
-      ]),
+            ),
+            Expanded(child: StreamBuilder<List<Notice>>(
+            stream: noticeBoard.watchAll(),
+            builder: (context, snap) {
+              if (snap.hasError) return Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('Bacheca non disponibile: ${snap.error}', textAlign: TextAlign.center)));
+              if (!snap.hasData || !adminSnap.hasData) return const Center(child: CircularProgressIndicator());
+              final list = isAdmin ? snap.data! : snap.data!.where((n) => n.tipo != 'promo').toList();
+              if (list.isEmpty) {
+                return Center(child: Padding(padding: const EdgeInsets.all(32), child: Text(emptyLabel, textAlign: TextAlign.center, style: const TextStyle(fontSize: 18))));
+              }
+              return ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 32), children: [
+                for (final n in list)
+                  Card(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      leading: n.imageUrl.isEmpty
+                          ? CircleAvatar(backgroundColor: Brand.primary.withValues(alpha: 0.1), child: Icon(_icon(n.tipo), color: Brand.primary))
+                          : ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 56, height: 56, child: NoticeImage(n.imageUrl))),
+                      title: Text(n.titolo, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+                      subtitle: Text('${n.tipoLabel}${n.attivo ? '' : ' · non in bacheca'} · ordine ${n.ordine}'),
+                      trailing: const Icon(Icons.edit, color: Brand.primary),
+                      onTap: () {
+                        if (!isAdmin && n.tipo == 'promo') {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solo gli amministratori gestiscono le promo.')));
+                          return;
+                        }
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => NoticeEditor(notice: n)));
+                      },
+                    ),
+                  ),
+              ]);
+            },
+          )),
+          ]),
+        );
+      },
     );
   }
 }
@@ -94,6 +125,24 @@ class _NoticeEditorState extends State<NoticeEditor> {
   late String _serviceId = widget.notice?.serviceId ?? '';
   late String _serviceName = widget.notice?.serviceName ?? '';
   bool _busy = false;
+  bool? _isAdmin;
+
+  @override
+  void initState() {
+    super.initState();
+    _employeeIsAdmin().then((admin) {
+      if (!mounted) return;
+      setState(() => _isAdmin = admin);
+      final isPromo = (widget.notice?.tipo ?? widget.initialTipo) == 'promo' || _tipo == 'promo';
+      if (!admin && isPromo) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solo gli amministratori gestiscono le promo.')));
+          Navigator.of(context).maybePop();
+        });
+      }
+    });
+  }
 
   Future<void> _pickDate(bool start) async {
     final initial = (start ? _start : _end) ?? DateTime.now();
@@ -144,6 +193,14 @@ class _NoticeEditorState extends State<NoticeEditor> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Scrivi un titolo')));
       return;
     }
+    if (_tipo == 'promo' && _isAdmin != true) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solo gli amministratori gestiscono le promo.')));
+      return;
+    }
+    if (widget.notice?.tipo == 'promo' && _isAdmin != true) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solo gli amministratori gestiscono le promo.')));
+      return;
+    }
     final url = _url.text.trim();
     final image = url.startsWith('http') ? url : _image;
     setState(() => _busy = true);
@@ -172,6 +229,10 @@ class _NoticeEditorState extends State<NoticeEditor> {
   Future<void> _delete() async {
     final id = widget.notice?.id;
     if (id == null || id.isEmpty) return;
+    if (widget.notice?.tipo == 'promo' && _isAdmin != true) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solo gli amministratori gestiscono le promo.')));
+      return;
+    }
     setState(() => _busy = true);
     try {
       await noticeBoard.remove(id);
@@ -199,12 +260,12 @@ class _NoticeEditorState extends State<NoticeEditor> {
             InputDecorator(
               decoration: const InputDecoration(labelText: 'Tipo'),
               child: DropdownButtonHideUnderline(child: DropdownButton<String>(
-                value: _tipo,
+                value: _tipo == 'promo' && _isAdmin != true ? 'novita' : _tipo,
                 isExpanded: true,
-                items: const [
-                  DropdownMenuItem(value: 'novita', child: Text('Novità')),
-                  DropdownMenuItem(value: 'evento', child: Text('Evento')),
-                  DropdownMenuItem(value: 'promo', child: Text('Promo')),
+                items: [
+                  const DropdownMenuItem(value: 'novita', child: Text('Novità')),
+                  const DropdownMenuItem(value: 'evento', child: Text('Evento')),
+                  if (_isAdmin == true) const DropdownMenuItem(value: 'promo', child: Text('Promo')),
                 ],
                 onChanged: (v) => setState(() => _tipo = v ?? 'novita'),
               )),

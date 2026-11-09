@@ -52,7 +52,7 @@ class _StaffHubState extends State<StaffHub> {
     final tiles = <_HubTile>[
       _HubTile('Oggi', 'Appuntamenti del giorno', Icons.today, Brand.green, () => StaffToday(employee: e)),
       _HubTile('Notifiche', 'Nuove prenotazioni e rimborsi', Icons.notifications, Brand.green, StaffNotificationsPage.new, badge: true),
-      const _HubTile('Bacheca', 'Qui aggiungi novità, promo, eventi', Icons.campaign, Brand.primary, StaffNotices.new),
+      _HubTile('Bacheca', e.isAdmin ? 'Qui aggiungi novità, promo, eventi' : 'Qui aggiungi novità ed eventi', Icons.campaign, Brand.primary, StaffNotices.new),
       const _HubTile('Calendario', 'Stanze e giorni', Icons.calendar_month, Brand.primary, StaffCalendar.new),
       const _HubTile('Elenco prenotazioni', 'Tabella con ricerca e azioni', Icons.view_list, Brand.primary, StaffBookingList.new),
       const _HubTile('Nuova prenotazione', 'Per un cliente al banco', Icons.add_circle, Brand.green, _staffBooking),
@@ -60,7 +60,7 @@ class _StaffHubState extends State<StaffHub> {
       if (e.isAdmin) const _HubTile('Disponibilità', 'Giorni e fasce prenotabili', Icons.event_available, Brand.primary, AvailabilityPage.new),
       if (e.isAdmin) const _HubTile('Assegnazioni', 'Chi ha creato le prenotazioni', Icons.assignment_ind, Brand.primary, AssegnazioniPage.new),
       _HubTile('Novità', 'Gestisci e aggiungi', Icons.campaign_outlined, Brand.green, () => const NoticeListScreen(tipo: 'novita', title: 'Novità', canManage: true)),
-      _HubTile('Promo', 'Gestisci e aggiungi', Icons.local_offer_outlined, Brand.green, () => const NoticeListScreen(tipo: 'promo', title: 'Promo', canManage: true)),
+      if (e.isAdmin) _HubTile('Promo', 'Gestisci e aggiungi', Icons.local_offer_outlined, Brand.green, () => const NoticeListScreen(tipo: 'promo', title: 'Promo', canManage: true)),
       _HubTile('Eventi', 'Gestisci e aggiungi', Icons.celebration_outlined, Brand.green, () => const NoticeListScreen(tipo: 'evento', title: 'Eventi', canManage: true)),
     ];
     return Scaffold(

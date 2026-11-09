@@ -9,15 +9,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../staff/staff_notices.dart';
 
-/// true se l'utente loggato è un admin attivo (employees/{uid}).
-Future<bool> _isAdmin() async {
+/// true se l'utente loggato è un admin attivo (employees/{uid}.ruolo == admin).
+Future<bool> _isRealAdmin() async {
   final u = FirebaseAuth.instance.currentUser;
   if (u == null || u.isAnonymous) return false;
   try {
     final d = await FirebaseFirestore.instance.doc('employees/${u.uid}').get();
     final r = (d.data()?['ruolo'] ?? '').toString().trim().toLowerCase();
-    return d.exists && (r == 'admin' || r == 'staff' || r == 'tricologo') && d.data()?['attivo'] != false;
-  } catch (e) { debugPrint('_isAdmin: $e'); return false; }
+    return d.exists && r == 'admin' && d.data()?['attivo'] != false;
+  } catch (e) { debugPrint('_isRealAdmin: $e'); return false; }
 }
 
 /// Volantino in Area personale: solo voci attive e nel periodo.
@@ -119,6 +119,7 @@ String _when(Notice n) {
 }
 
 /// Schermata volantini filtrati per tipo (novita | promo | evento).
+/// Gestione promo riservata agli admin; novità/eventi gestibili anche dallo staff.
 class NoticeListScreen extends StatelessWidget {
   const NoticeListScreen({super.key, required this.tipo, required this.title, this.canManage = false});
   final String tipo, title;
@@ -129,6 +130,30 @@ class NoticeListScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Promo in modalità gestione: solo admin; altrimenti torna indietro.
+    if (canManage && tipo == 'promo') {
+      return FutureBuilder<bool>(
+        future: _isRealAdmin(),
+        builder: (context, snap) {
+          if (!snap.hasData) {
+            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          }
+          if (snap.data != true) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) Navigator.of(context).maybePop();
+            });
+            return Scaffold(
+              appBar: BrandAppBar(subtitle: title),
+              body: const Center(child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('Solo gli amministratori gestiscono le promo.', textAlign: TextAlign.center, style: TextStyle(fontSize: 17)),
+              )),
+            );
+          }
+          return _buildBody(context, true, false, FirebaseAuth.instance.currentUser?.email);
+        },
+      );
+    }
     if (canManage) return _buildBody(context, true, false, FirebaseAuth.instance.currentUser?.email);
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
@@ -143,15 +168,19 @@ class NoticeListScreen extends StatelessWidget {
           builder: (context, empSnap) {
             if (empSnap.hasError) debugPrint('NoticeList employees: ${empSnap.error}');
             var isEmp = false;
+            var isRealAdmin = false;
             try {
               final d = empSnap.hasError ? null : empSnap.data;
               final m = d?.data();
               final r = (m?['ruolo'] ?? '').toString().trim().toLowerCase();
-              isEmp = d != null && d.exists && (r == 'admin' || r == 'staff' || r == 'tricologo') && m?['attivo'] != false;
+              final attivo = m?['attivo'] != false;
+              isEmp = d != null && d.exists && (r == 'admin' || r == 'staff' || r == 'tricologo') && attivo;
+              isRealAdmin = d != null && d.exists && r == 'admin' && attivo;
             } catch (e) { debugPrint('NoticeList emp parse: $e'); }
-            final admin = canManage || isEmp;
-            final loading = !canManage && empStream != null && !empSnap.hasData && !empSnap.hasError;
-            return _buildBody(context, admin, loading, u?.email);
+            // Promo: solo admin può gestire; novità/eventi: qualsiasi dipendente.
+            final manage = tipo == 'promo' ? isRealAdmin : (canManage || isEmp);
+            final loading = empStream != null && !empSnap.hasData && !empSnap.hasError;
+            return _buildBody(context, manage, loading, u?.email);
           },
         );
       },
