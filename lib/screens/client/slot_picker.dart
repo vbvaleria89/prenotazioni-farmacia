@@ -24,28 +24,60 @@ class _SlotPickerState extends State<SlotPicker> {
   List<DateTime> days = const [];
   bool loadingDays = true;
   String? daysError;
+  Future<(List<DateTime>, bool)>? _dayFuture;
+  DateTime? _futureDay;
 
   static const _weekdays = ['lun', 'mar', 'mer', 'gio', 'ven', 'sab', 'dom'];
 
   @override
   void initState() {
     super.initState();
+    bookingService.addListener(_onBookingsChanged);
     _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    bookingService.removeListener(_onBookingsChanged);
+    super.dispose();
+  }
+
+  void _onBookingsChanged() {
+    if (!mounted || day == null) return;
+    _startLoad(day!, force: true);
+  }
+
+  bool _same(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
+
+  void _selectDay(DateTime d) {
+    if (day != null && _same(day!, d) && _dayFuture != null) return;
+    _startLoad(d);
+  }
+
+  void _startLoad(DateTime d, {bool force = false}) {
+    setState(() {
+      day = d;
+      if (force || _futureDay == null || !_same(_futureDay!, d)) {
+        _futureDay = d;
+        _dayFuture = _load(d);
+      }
+    });
+    _prefetchAround(d);
+  }
+
+  void _prefetchAround(DateTime d) {
+    final i = days.indexWhere((x) => _same(x, d));
+    if (i >= 0 && i + 1 < days.length) {
+      bookingService.prefetchSlots(widget.service, days[i + 1]);
+    }
   }
 
   Future<void> _bootstrap() async {
     try {
       final all = await bookingService.daysWithAvailability(daysAhead: 60);
       final forService = [for (final d in all) if (widget.service.availableOn(d.weekday)) d];
-      DateTime? selected;
-      for (final d in forService) {
-        final slots = await bookingService.availableSlots(widget.service, d);
-        if (slots.isNotEmpty) {
-          selected = d;
-          break;
-        }
-      }
-      selected ??= forService.isNotEmpty ? forService.first : null;
+      // Non calcola tutti i giorni della striscia: solo il primo prenotabile (cache per il FutureBuilder).
+      var selected = await bookingService.firstBookableDay(widget.service, daysAhead: 60);
       List<DateTime> shown = const [];
       if (widget.fromStaff) {
         final t = DateTime.now();
@@ -61,7 +93,12 @@ class _SlotPickerState extends State<SlotPicker> {
         day = selected;
         loadingDays = false;
         daysError = null;
+        if (selected != null) {
+          _futureDay = selected;
+          _dayFuture = _load(selected);
+        }
       });
+      if (selected != null) _prefetchAround(selected);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -82,9 +119,7 @@ class _SlotPickerState extends State<SlotPicker> {
     var noFasce = false;
     if (widget.fromStaff && slots.isEmpty) noFasce = (await bookingService.availability(d)).isEmpty;
     if (widget.fromStaff) {
-      for (final t in slots) {
-        try { _free[t] = await bookingService.freeEmployees(widget.service, t); } catch (_) { _free[t] = const []; }
-      }
+      _free.addAll(bookingService.slotPeople(widget.service, d));
     }
     return (slots, noFasce);
   }
@@ -174,25 +209,24 @@ class _SlotPickerState extends State<SlotPicker> {
           DayStrip(
             days: days,
             selected: day,
-            onSelected: (d) => setState(() => day = d),
+            onSelected: _selectDay,
             labelOf: _chipLabel,
           ),
           Expanded(
-            child: ListenableBuilder(
-              listenable: bookingService,
-              builder: (context, _) {
+            child: Builder(
+              builder: (context) {
                 final selected = day;
-                if (selected == null) {
+                if (selected == null || _dayFuture == null) {
                   return const Center(child: Text('Seleziona un giorno'));
                 }
                 return FutureBuilder(
-                  future: _load(selected),
+                  future: _dayFuture,
                   builder: (context, snap) {
                     if (snap.hasError) {
                       final e = snap.error;
                       return Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(e is StateError ? e.message : 'Errore nel caricamento degli orari: $e', textAlign: TextAlign.center)));
                     }
-                    if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+                    if (!snap.hasData) return const SlotTimesSkeleton();
                     final (slots, noFasce) = snap.data!;
                     if (slots.isEmpty) {
                       if (widget.fromStaff && noFasce) {

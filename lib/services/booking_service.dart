@@ -32,6 +32,114 @@ class BookingService extends ChangeNotifier {
   /// Evita doppie scritture concurrent su scadute → completato.
   final Set<String> _markingExpired = {};
 
+  /// Cache di sessione per il calcolo slot.
+  Map<String, List<Fascia>>? _fasceByDay;
+  DateTime? _fasceRangeStart, _fasceRangeEnd;
+  Future<Map<String, List<Fascia>>>? _fasceRangeLoading;
+  Map<String, List<String>>? _staffServicesCache;
+  Future<Map<String, List<String>>>? _staffServicesLoading;
+  final Map<String, Map<String, dynamic>?> _roomDayCache = {};
+  final Map<String, List<Appointment>> _apptsDayCache = {};
+  final Map<String, List<DeviceHold>> _deviceDayCache = {};
+  final Map<String, (List<DateTime> slots, Map<DateTime, List<(String, String)>> people)> _slotsCache = {};
+  int _slotQueries = 0;
+  /// Ultima misurazione di [availableSlots] (query Firestore e millisecondi).
+  int lastSlotQueryCount = 0;
+  int lastSlotMs = 0;
+
+  void _clearSlotOccupancyCache() {
+    _roomDayCache.clear();
+    _apptsDayCache.clear();
+    _deviceDayCache.clear();
+    _slotsCache.clear();
+  }
+
+  void _invalidateStaticSlotCache() {
+    _fasceByDay = null;
+    _fasceRangeStart = null;
+    _fasceRangeEnd = null;
+    _fasceRangeLoading = null;
+    _staffServicesCache = null;
+    _staffServicesLoading = null;
+    _clearSlotOccupancyCache();
+  }
+
+  @override
+  void notifyListeners() {
+    _clearSlotOccupancyCache();
+    super.notifyListeners();
+  }
+
+  bool _fasceRangeCovers(DateTime start, DateTime end) =>
+      _fasceByDay != null &&
+      _fasceRangeStart != null &&
+      _fasceRangeEnd != null &&
+      !_fasceRangeStart!.isAfter(_d0(start)) &&
+      !_fasceRangeEnd!.isBefore(_d0(end));
+
+  Future<Map<String, List<Fascia>>> _ensureFasceRange(DateTime start, DateTime end) async {
+    start = _d0(start);
+    end = _d0(end);
+    if (_fasceRangeCovers(start, end)) return _fasceByDay!;
+    if (_fasceRangeLoading != null) {
+      final loaded = await _fasceRangeLoading!;
+      if (_fasceRangeCovers(start, end)) return loaded;
+    }
+    final fut = () async {
+      _slotQueries++;
+      final q = await _db.collection('availability')
+          .where(FieldPath.documentId, isGreaterThanOrEqualTo: availKey(start))
+          .where(FieldPath.documentId, isLessThanOrEqualTo: availKey(end))
+          .get();
+      final map = {for (final d in q.docs) d.id: fasceOf(d.data())};
+      _fasceByDay = map;
+      _fasceRangeStart = start;
+      _fasceRangeEnd = end;
+      return map;
+    }();
+    _fasceRangeLoading = fut;
+    try {
+      return await fut;
+    } finally {
+      if (identical(_fasceRangeLoading, fut)) _fasceRangeLoading = null;
+    }
+  }
+
+  DateTime _parseAvailKey(String id) {
+    final parts = id.split('-');
+    if (parts.length != 3) return DateTime(0);
+    final y = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    final d = int.tryParse(parts[2]);
+    if (y == null || m == null || d == null) return DateTime(0);
+    return DateTime(y, m, d);
+  }
+
+  Future<Map<String, dynamic>?> _roomDayData(DateTime day) async {
+    final key = _dayKey(day);
+    if (_roomDayCache.containsKey(key)) return _roomDayCache[key];
+    try {
+      _slotQueries++;
+      final data = (await _db.doc('roomDays/$key').get()).data();
+      _roomDayCache[key] = data;
+      return data;
+    } catch (_) {
+      _roomDayCache[key] = null;
+      return null;
+    }
+  }
+
+  String _slotsCacheKey(ServiceType service, DateTime day, {String? excludeId, DateTime? keepSlot}) =>
+      '${service.id}|${availKey(day)}|${excludeId ?? ''}|${keepSlot?.millisecondsSinceEpoch ?? 0}';
+
+  /// Persone libere per gli slot già calcolati (stessa cache di [availableSlots], niente letture extra).
+  Map<DateTime, List<(String, String)>> slotPeople(ServiceType service, DateTime day, {String? excludeId, DateTime? keepSlot}) =>
+      Map.of(_slotsCache[_slotsCacheKey(service, day, excludeId: excludeId, keepSlot: keepSlot)]?.$2 ?? const {});
+
+  void prefetchSlots(ServiceType service, DateTime day, {String? excludeId, DateTime? keepSlot}) {
+    unawaited(availableSlots(service, day, excludeId: excludeId, keepSlot: keepSlot));
+  }
+
   CollectionReference<Map<String, dynamic>> get _appts => _db.collection('appointments');
   DocumentReference<Map<String, dynamic>> get settingsRef => _db.doc('settings/pharmacy');
 
@@ -169,7 +277,10 @@ class BookingService extends ChangeNotifier {
     out.sort((a, b) => a.$1.compareTo(b.$1));
     return out;
   }
-  Future<List<(int, int)>> availability(DateTime d) async => rangesOf((await availRef(d).get()).data());
+  Future<List<(int, int)>> availability(DateTime d) async {
+    final f = await fasce(d);
+    return [for (final x in f) (x.start, x.end)];
+  }
   Stream<Map<String, List<(int, int)>>> watchAvailabilityMonth(DateTime month) => _db.collection('availability')
       .where(FieldPath.documentId, isGreaterThanOrEqualTo: availKey(DateTime(month.year, month.month, 1)))
       .where(FieldPath.documentId, isLessThanOrEqualTo: availKey(DateTime(month.year, month.month + 1, 0)))
@@ -182,14 +293,35 @@ class BookingService extends ChangeNotifier {
       ..sort((a, b) => a.start != b.start ? a.start.compareTo(b.start) : a.chi.compareTo(b.chi));
     return out;
   }
-  Future<List<Fascia>> fasce(DateTime d) async => fasceOf((await availRef(d).get()).data());
+  Future<List<Fascia>> fasce(DateTime d) async {
+    final key = availKey(d);
+    final day = _d0(d);
+    if (_fasceRangeCovers(day, day)) return _fasceByDay![key] ?? const [];
+    try {
+      final today = _d0(DateTime.now());
+      final horizon = today.add(const Duration(days: 60));
+      if (!day.isBefore(today) && !day.isAfter(horizon)) {
+        final map = await _ensureFasceRange(today, horizon);
+        return map[key] ?? const [];
+      }
+    } catch (_) {}
+    _slotQueries++;
+    final list = fasceOf((await availRef(d).get()).data());
+    (_fasceByDay ??= {})[key] = list;
+    return list;
+  }
   Stream<Map<String, List<Fascia>>> watchFasceMonth(DateTime month) => _db.collection('availability')
       .where(FieldPath.documentId, isGreaterThanOrEqualTo: availKey(DateTime(month.year, month.month, 1)))
       .where(FieldPath.documentId, isLessThanOrEqualTo: availKey(DateTime(month.year, month.month + 1, 0)))
       .snapshots().map((q) => {for (final d in q.docs) d.id: fasceOf(d.data())});
-  Future<void> saveFasce(DateTime d, List<Fascia> fasce) => fasce.isEmpty
-      ? availRef(d).delete()
-      : availRef(d).set({'fasce': [for (final f in fasce) f.toMap()], 'updatedAt': FieldValue.serverTimestamp()});
+  Future<void> saveFasce(DateTime d, List<Fascia> fasce) async {
+    _invalidateStaticSlotCache();
+    if (fasce.isEmpty) {
+      await availRef(d).delete();
+    } else {
+      await availRef(d).set({'fasce': [for (final f in fasce) f.toMap()], 'updatedAt': FieldValue.serverTimestamp()});
+    }
+  }
   /// Una transazione atomica sul mese (massimo 31 documenti): preserva modifiche concorrenti.
   Future<int> deleteFasce(List<(DateTime, Fascia)> rows) async {
     final grouped = <String, List<Fascia>>{};
@@ -209,7 +341,7 @@ class BookingService extends ChangeNotifier {
         }
       }
       return removed;
-    });
+    }).whenComplete(_invalidateStaticSlotCache);
   }
 
   Future<void> saveAvailability(DateTime d, List<(int, int)> fasce) => saveFasce(d, [for (final f in fasce) Fascia(f.$1, f.$2)]);
@@ -217,15 +349,32 @@ class BookingService extends ChangeNotifier {
   // ---- Servizi per persona (collection pubblica `staffServices/{uid}` = {servizi: [serviceId]}) ----
   /// Nessun documento o lista vuota = la persona può fare TUTTI i servizi attivi (migrazione soft).
   Future<Map<String, List<String>>> staffServices() async {
+    if (_staffServicesCache != null) return _staffServicesCache!;
+    if (_staffServicesLoading != null) return _staffServicesLoading!;
+    final fut = () async {
+      try {
+        _slotQueries++;
+        final q = await _db.collection('staffServices').get();
+        final map = {for (final d in q.docs) d.id: [for (final x in (d.data()['servizi'] as List? ?? const [])) x.toString()]};
+        _staffServicesCache = map;
+        return map;
+      } catch (_) {
+        return const <String, List<String>>{};
+      }
+    }();
+    _staffServicesLoading = fut;
     try {
-      final q = await _db.collection('staffServices').get();
-      return {for (final d in q.docs) d.id: [for (final x in (d.data()['servizi'] as List? ?? const [])) x.toString()]};
-    } catch (_) {
-      return const {};
+      return await fut;
+    } finally {
+      if (identical(_staffServicesLoading, fut)) _staffServicesLoading = null;
     }
   }
-  Future<void> saveStaffServices(String uid, List<String> servizi) =>
-      _db.doc('staffServices/$uid').set({'servizi': servizi, 'updatedAt': FieldValue.serverTimestamp()});
+  Future<void> saveStaffServices(String uid, List<String> servizi) async {
+    _staffServicesCache = null;
+    _staffServicesLoading = null;
+    _slotsCache.clear();
+    await _db.doc('staffServices/$uid').set({'servizi': servizi, 'updatedAt': FieldValue.serverTimestamp()});
+  }
   static bool canDo(Map<String, List<String>> svc, String? emp, String serviceId) {
     if (emp == null || emp.isEmpty) return true;
     final l = svc[emp];
@@ -338,10 +487,8 @@ class BookingService extends ChangeNotifier {
         'roomName': Room.registry[roomId]?.nome,
       };
 
-  Future<List<(String, DateTime, DateTime, String, int)>> _blocks(DateTime day) async {
-    final snap = await _db.doc('roomDays/${_dayKey(day)}').get();
-    return _blocksOf(snap.data());
-  }
+  Future<List<(String, DateTime, DateTime, String, int)>> _blocks(DateTime day) async =>
+      _blocksOf(await _roomDayData(day));
 
   Future<void> _backfillBlocks(DateTime day, List<Appointment> appts) async {
     if (appts.isEmpty) return;
@@ -479,10 +626,28 @@ class BookingService extends ChangeNotifier {
   Future<List<DeviceHold>> _loadDeviceHoldsRange(DateTime from, DateTime to) async {
     final end = to.isAfter(from) ? to : from.add(const Duration(seconds: 1));
     final out = <DeviceHold>[];
+    final missing = <DateTime>[];
     for (final d in daysOverlappingHold(from, end)) {
-      try {
-        out.addAll(_holdsOf((await _deviceDayRef(d).get()).data()));
-      } catch (_) {}
+      final key = _dayKey(d);
+      if (_deviceDayCache.containsKey(key)) {
+        out.addAll(_deviceDayCache[key]!);
+      } else {
+        missing.add(d);
+      }
+    }
+    if (missing.isNotEmpty) {
+      final snaps = await Future.wait(missing.map((d) async {
+        try {
+          _slotQueries++;
+          return (d, _holdsOf((await _deviceDayRef(d).get()).data()));
+        } catch (_) {
+          return (d, const <DeviceHold>[]);
+        }
+      }));
+      for (final item in snaps) {
+        _deviceDayCache[_dayKey(item.$1)] = item.$2;
+        out.addAll(item.$2);
+      }
     }
     return out;
   }
@@ -650,39 +815,36 @@ class BookingService extends ChangeNotifier {
   }
 
   Future<List<Appointment>> _appointmentsOrEmpty(DateTime day) async {
+    final key = _dayKey(day);
+    final cached = _apptsDayCache[key];
+    if (cached != null) return cached;
     try {
+      _slotQueries++;
       final list = await forDay(day);
-      try { await _backfillBlocks(day, list); } catch (_) {}
+      _apptsDayCache[key] = list;
+      // Non bloccare la lettura slot: il backfill può avvenire in background.
+      unawaited(Future(() async { try { await _backfillBlocks(day, list); } catch (_) {} }));
       return list;
     } on FirebaseException catch (e) {
-      if (e.code == 'permission-denied') return const [];
+      if (e.code == 'permission-denied') {
+        _apptsDayCache[key] = const [];
+        return const [];
+      }
       rethrow;
     }
   }
 
-  /// Slot liberi se almeno una stanza ammessa dal servizio è libera in quell'orario.
-  /// [excludeId] ignora quella prenotazione (modifica).
-  /// [keepSlot] resta selezionabile anche se nel passato (slot attuale in modifica).
   /// Giorni da oggi in poi (entro [daysAhead]) con almeno una fascia in `availability`.
   Future<List<DateTime>> daysWithAvailability({int daysAhead = 60}) async {
     await ensureClientAuth();
     final start = _d0(DateTime.now());
     final end = start.add(Duration(days: daysAhead));
-    final q = await _db.collection('availability')
-        .where(FieldPath.documentId, isGreaterThanOrEqualTo: availKey(start))
-        .where(FieldPath.documentId, isLessThanOrEqualTo: availKey(end))
-        .get();
+    final map = await _ensureFasceRange(start, end);
     final days = <DateTime>[];
-    for (final doc in q.docs) {
-      if (rangesOf(doc.data()).isEmpty) continue;
-      final parts = doc.id.split('-');
-      if (parts.length != 3) continue;
-      final y = int.tryParse(parts[0]);
-      final m = int.tryParse(parts[1]);
-      final d = int.tryParse(parts[2]);
-      if (y == null || m == null || d == null) continue;
-      final day = DateTime(y, m, d);
-      if (day.isBefore(start)) continue;
+    for (final e in map.entries) {
+      if (e.value.isEmpty) continue;
+      final day = _parseAvailKey(e.key);
+      if (day.year == 0 || day.isBefore(start)) continue;
       days.add(day);
     }
     days.sort();
@@ -693,6 +855,7 @@ class BookingService extends ChangeNotifier {
   /// Se tutti i giorni con fasce sono pieni, torna comunque il primo con fasce compatibili.
   Future<DateTime?> firstBookableDay(ServiceType service, {int daysAhead = 60}) async {
     final candidates = await daysWithAvailability(daysAhead: daysAhead);
+    unawaited(staffServices());
     DateTime? firstWithFasce;
     for (final d in candidates) {
       if (!service.availableOn(d.weekday)) continue;
@@ -703,23 +866,46 @@ class BookingService extends ChangeNotifier {
     return firstWithFasce;
   }
 
+  /// Slot liberi se almeno una stanza ammessa dal servizio è libera in quell'orario.
+  /// [excludeId] ignora quella prenotazione (modifica).
+  /// [keepSlot] resta selezionabile anche se nel passato (slot attuale in modifica).
   Future<List<DateTime>> availableSlots(ServiceType service, DateTime day, {String? excludeId, DateTime? keepSlot}) async {
     await ensureClientAuth();
     if (!service.availableOn(day.weekday)) return [];
+    final cacheKey = _slotsCacheKey(service, day, excludeId: excludeId, keepSlot: keepSlot);
+    final memo = _slotsCache[cacheKey];
+    if (memo != null) return List<DateTime>.of(memo.$1);
+
+    _slotQueries = 0;
+    final sw = Stopwatch()..start();
+    // staffServices in parallelo alle fasce (spesso già in cache dopo il primo giorno).
+    final staffFut = staffServices();
     final fl = await _fasceFor(service, day);
-    if (fl.isEmpty) return [];
+    await staffFut;
+    if (fl.isEmpty) {
+      lastSlotQueryCount = _slotQueries;
+      lastSlotMs = sw.elapsedMilliseconds;
+      _slotsCache[cacheKey] = (const [], const {});
+      debugPrint('slot ${availKey(day)} ${service.id}: ${lastSlotMs}ms queries=$lastSlotQueryCount slots=0 (niente fasce)');
+      return const [];
+    }
     final fasce = [for (final f in fl) (f.start, f.end)];
-    final appts = await _appointmentsOrEmpty(day);
-    final blocks = await _blocks(day);
-    final eb = _empBlocksOf((await _db.doc('roomDays/${_dayKey(day)}').get()).data());
-    final deviceHolds = service.usesDevice
-        ? await _loadDeviceHoldsAround(_d0(day).add(const Duration(hours: 12)), service.deviceHoldHours + 12)
-        : const <DeviceHold>[];
+    final deviceFut = service.usesDevice
+        ? _loadDeviceHoldsAround(_d0(day).add(const Duration(hours: 12)), service.deviceHoldHours + 12)
+        : Future<List<DeviceHold>>.value(const []);
+    final apptsFut = _appointmentsOrEmpty(day);
+    final roomFut = _roomDayData(day);
+    final busyFut = _busy(day);
+    final appts = await apptsFut;
+    final room = await roomFut;
+    final blocks = _blocksOf(room);
+    final eb = _empBlocksOf(room);
+    final deviceHolds = await deviceFut;
+    final busy = await busyFut;
     bool personOk(DateTime t) {
       final e = t.add(service.duration);
       return _genericCovers(fl, t, e) || _freePeople(fl, t, e, eb, appts, excludeId: excludeId).isNotEmpty;
     }
-    final busy = await _busy(day);
     final d = _d0(day);
     final now = DateTime.now();
     final keep = keepSlot == null ? null : DateTime(keepSlot.year, keepSlot.month, keepSlot.day, keepSlot.hour, keepSlot.minute);
@@ -734,7 +920,15 @@ class BookingService extends ChangeNotifier {
       // in modifica lo slot attuale resta selezionabile anche se fuori disponibilità
       if (_slotOk(service, keep, keep.add(service.duration), appts, blocks, busy, excludeId: excludeId, deviceHolds: deviceHolds)) out.add(keep);
     }
-    return out.toList()..sort();
+    final slots = out.toList()..sort();
+    final people = <DateTime, List<(String, String)>>{
+      for (final t in slots) t: _freePeople(fl, t, t.add(service.duration), eb, appts, excludeId: excludeId),
+    };
+    _slotsCache[cacheKey] = (slots, people);
+    lastSlotQueryCount = _slotQueries;
+    lastSlotMs = sw.elapsedMilliseconds;
+    debugPrint('slot ${availKey(day)} ${service.id}: ${lastSlotMs}ms queries=$lastSlotQueryCount slots=${slots.length}');
+    return List<DateTime>.of(slots);
   }
 
   Future<String?> _customerUid() async {

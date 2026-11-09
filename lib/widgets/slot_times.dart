@@ -111,3 +111,34 @@ class SlotTimes extends StatelessWidget {
     );
   }
 }
+
+
+/// Placeholder mentre arrivano gli orari, stessa densità dei chip desktop.
+class SlotTimesSkeleton extends StatelessWidget {
+  const SlotTimesSkeleton({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.surfaceContainerHighest;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 840),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (var i = 0; i < 12; i++)
+                Container(
+                  width: 88,
+                  height: 40,
+                  decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(8)),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

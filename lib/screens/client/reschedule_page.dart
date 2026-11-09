@@ -42,6 +42,7 @@ class _ReschedulePageState extends State<ReschedulePage> {
   DateTime? day;
   bool loading = true;
   bool saving = false;
+  Future<List<DateTime>>? _dayFuture;
 
   Appointment get a => widget.appointment;
 
@@ -56,11 +57,17 @@ class _ReschedulePageState extends State<ReschedulePage> {
       final all = await bookingService.daysWithAvailability(daysAhead: 60);
       final ds = [for (final d in all) if (a.service.availableOn(d.weekday)) d];
       if (!mounted) return;
+      final selected = ds.firstWhere((d) => _sameDay(d, a.start), orElse: () => ds.isEmpty ? a.start : ds.first);
       setState(() {
         days = ds;
-        day = ds.firstWhere((d) => _sameDay(d, a.start), orElse: () => ds.isEmpty ? a.start : ds.first);
+        day = selected;
         loading = false;
+        _dayFuture = bookingService.availableSlots(a.service, selected, excludeId: a.id);
       });
+      final i = ds.indexWhere((d) => _sameDay(d, selected));
+      if (i >= 0 && i + 1 < ds.length) {
+        bookingService.prefetchSlots(a.service, ds[i + 1], excludeId: a.id);
+      }
     } catch (_) {
       if (mounted) setState(() => loading = false);
     }
@@ -120,17 +127,25 @@ class _ReschedulePageState extends State<ReschedulePage> {
                 DayStrip(
                   days: days,
                   selected: day,
-                  onSelected: (d) => setState(() => day = d),
+                  onSelected: (d) {
+                    setState(() {
+                      day = d;
+                      _dayFuture = bookingService.availableSlots(a.service, d, excludeId: a.id);
+                    });
+                    final i = days.indexWhere((x) => _sameDay(x, d));
+                    if (i >= 0 && i + 1 < days.length) {
+                      bookingService.prefetchSlots(a.service, days[i + 1], excludeId: a.id);
+                    }
+                  },
                 ),
                 Expanded(
-                  child: day == null
+                  child: day == null || _dayFuture == null
                       ? const SizedBox()
                       : FutureBuilder<List<DateTime>>(
-                          key: ValueKey(day),
-                          future: bookingService.availableSlots(a.service, day!, excludeId: a.id),
+                          future: _dayFuture,
                           builder: (context, snap) {
                             if (snap.hasError) return Center(child: Text('Errore: ${snap.error}'));
-                            if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+                            if (!snap.hasData) return const SlotTimesSkeleton();
                             final slots = snap.data!.where((t) => t != a.start && t.isAfter(DateTime.now())).toList();
                             if (slots.isEmpty) return const Center(child: Text('Nessuno slot libero in questo giorno'));
                             return SlotTimes(
