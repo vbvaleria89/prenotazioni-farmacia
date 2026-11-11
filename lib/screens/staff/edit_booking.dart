@@ -280,10 +280,12 @@ class _EditBookingPageState extends State<EditBookingPage> {
           const SizedBox(height: 8),
           SegmentedButton<String>(
             showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: 'no', label: Text('No'), icon: Icon(Icons.close, size: 16)),
-              ButtonSegment(value: 'carta', label: Text('Carta'), icon: Icon(Icons.credit_card, size: 16)),
-              ButtonSegment(value: 'bancomat', label: Text('Bancomat'), icon: Icon(Icons.payment, size: 16)),
+            segments: [
+              const ButtonSegment(value: 'no', label: Text('No'), icon: Icon(Icons.close, size: 16)),
+              const ButtonSegment(value: 'carta', label: Text('Carta'), icon: Icon(Icons.credit_card, size: 16)),
+              const ButtonSegment(value: 'contanti', label: Text('Contanti'), icon: Icon(Icons.payments, size: 16)),
+              if (_metodo == 'bancomat')
+                const ButtonSegment(value: 'bancomat', label: Text('Bancomat'), icon: Icon(Icons.payment, size: 16)),
             ],
             selected: {_metodo ?? 'no'},
             onSelectionChanged: (s) {

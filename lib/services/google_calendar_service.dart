@@ -76,6 +76,7 @@ class GoogleCalendarService implements CalendarService {
     if (a.pagato) {
       stato += switch (a.metodoPagamento) {
         'carta' => ' · Pagato · Carta',
+        'contanti' => ' · Pagato · Contanti',
         'bancomat' => ' · Pagato · Bancomat',
         _ => ' · Pagato',
       };

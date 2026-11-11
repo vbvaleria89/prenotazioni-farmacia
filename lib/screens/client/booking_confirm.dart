@@ -38,7 +38,7 @@ class _BookingConfirmState extends State<BookingConfirm> {
   bool _clienteTrovato = false;
   Timer? _deb;
   bool _esenzione = false;
-  /// null = non pagato; `carta` | `bancomat` = pagato con quel metodo (tap unico al banco).
+  /// null = non pagato; `carta` | `contanti` = pagato con quel metodo (tap unico al banco).
   String? _metodoPagamento;
   final _ricetta = TextEditingController();
   final _note = TextEditingController();
@@ -424,7 +424,7 @@ class _BookingConfirmState extends State<BookingConfirm> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 const Text('Pagamento al banco', style: TextStyle(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
-                Text(_metodoPagamento == null ? 'Non pagato' : (_metodoPagamento == 'carta' ? 'Pagato con carta' : 'Pagato con bancomat'),
+                Text(_metodoPagamento == null ? 'Non pagato' : (_metodoPagamento == 'carta' ? 'Pagato con carta' : 'Pagato in contanti'),
                     style: const TextStyle(fontSize: 13, color: Colors.black54)),
                 const SizedBox(height: 8),
                 SegmentedButton<String>(
@@ -432,7 +432,7 @@ class _BookingConfirmState extends State<BookingConfirm> {
                   segments: const [
                     ButtonSegment(value: 'no', label: Text('No'), icon: Icon(Icons.close, size: 16)),
                     ButtonSegment(value: 'carta', label: Text('Carta'), icon: Icon(Icons.credit_card, size: 16)),
-                    ButtonSegment(value: 'bancomat', label: Text('Bancomat'), icon: Icon(Icons.payment, size: 16)),
+                    ButtonSegment(value: 'contanti', label: Text('Contanti'), icon: Icon(Icons.payments, size: 16)),
                   ],
                   selected: {_metodoPagamento ?? 'no'},
                   onSelectionChanged: (s) {

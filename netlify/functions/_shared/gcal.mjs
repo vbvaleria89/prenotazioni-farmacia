@@ -102,6 +102,7 @@ export function paymentLabel(data) {
   if (!data?.pagato) return '';
   const m = String(data.metodoPagamento || '').trim().toLowerCase();
   if (m === 'carta') return 'Pagato · Carta';
+  if (m === 'contanti') return 'Pagato · Contanti';
   if (m === 'bancomat') return 'Pagato · Bancomat';
   return 'Pagato';
 }

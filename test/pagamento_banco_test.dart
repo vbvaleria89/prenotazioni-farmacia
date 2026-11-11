@@ -12,7 +12,7 @@ void main() {
     prezzo: 25,
   );
 
-  test('Appointment tiene metodoPagamento carta/bancomat', () {
+  test('Appointment tiene metodoPagamento carta/contanti', () {
     final a = Appointment(
       id: 'abc123',
       service: svc,
@@ -46,15 +46,16 @@ void main() {
     expect(emailErr('nope'), 'Email non valida');
   });
 
-  test('carta/bancomat implica pagato in book()', () {
+  test('carta/contanti implica pagato in book()', () {
     String? normalize(String? metodoPagamento, bool pagato) {
       final metodo = (metodoPagamento == null || metodoPagamento.trim().isEmpty)
           ? null
           : metodoPagamento.trim().toLowerCase();
-      final paid = pagato || metodo == 'carta' || metodo == 'bancomat';
+      final paid = pagato || metodo == 'carta' || metodo == 'contanti' || metodo == 'bancomat';
       return paid ? metodo : null;
     }
     expect(normalize('carta', false), 'carta');
+    expect(normalize('contanti', false), 'contanti');
     expect(normalize('bancomat', false), 'bancomat');
     expect(normalize(null, false), isNull);
     expect(normalize('carta', true), 'carta');

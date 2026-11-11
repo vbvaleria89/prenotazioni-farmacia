@@ -48,6 +48,7 @@ class PagatoBadge extends StatelessWidget {
     final ok = a.pagato;
     final metodo = switch (a.metodoPagamento) {
       'carta' => ' · Carta',
+      'contanti' => ' · Contanti',
       'bancomat' => ' · Bancomat',
       _ => '',
     };
@@ -87,7 +88,7 @@ class StatoBadge extends StatelessWidget {
       };
 }
 
-/// Tap «Pagato» al banco: mini scelta Carta | Bancomat, poi salva.
+/// Tap «Pagato» al banco: mini scelta Carta | Contanti, poi salva.
 Future<String?> scegliMetodoPagamento(BuildContext context) => showModalBottomSheet<String>(
     context: context,
     builder: (c) => SafeArea(child: Padding(
@@ -95,7 +96,7 @@ Future<String?> scegliMetodoPagamento(BuildContext context) => showModalBottomSh
       child: Row(children: [
         Expanded(child: SizedBox(height: 64, child: FilledButton.icon(onPressed: () => Navigator.pop(c, 'carta'), icon: const Icon(Icons.credit_card), label: const Text('Carta', style: TextStyle(fontSize: 20))))),
         const SizedBox(width: 12),
-        Expanded(child: SizedBox(height: 64, child: FilledButton.icon(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2E9E4F)), onPressed: () => Navigator.pop(c, 'bancomat'), icon: const Icon(Icons.payment), label: const Text('Bancomat', style: TextStyle(fontSize: 20))))),
+        Expanded(child: SizedBox(height: 64, child: FilledButton.icon(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2E9E4F)), onPressed: () => Navigator.pop(c, 'contanti'), icon: const Icon(Icons.payments), label: const Text('Contanti', style: TextStyle(fontSize: 20))))),
       ]),
     )),
   );

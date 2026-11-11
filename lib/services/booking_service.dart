@@ -14,6 +14,7 @@ import '../models/customer.dart';
 import '../models/service_type.dart';
 import '../models/settings.dart';
 import 'google_calendar_service.dart';
+import 'slot_grid.dart';
 
 /// Prenotazioni su Firestore. Due stanze fisse (1 e 2): overlap solo sulla stessa stanza.
 /// `roomDays/{yyyy-mm-dd}` contiene blocks con roomId; una prenotazione occupa UNA sola stanza.
@@ -28,7 +29,6 @@ class BookingService extends ChangeNotifier {
 
   final _db = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
-  static const slotStep = Duration(minutes: 15);
   /// Evita doppie scritture concurrent su scadute → completato.
   final Set<String> _markingExpired = {};
 
@@ -706,7 +706,7 @@ class BookingService extends ChangeNotifier {
       final fl = await _fasceFor(service, day);
       if (fl.isEmpty) continue;
       for (final f in fl) {
-        for (var slot = day.add(Duration(minutes: f.start)); !slot.add(service.duration).isAfter(day.add(Duration(minutes: f.end))); slot = slot.add(slotStep)) {
+        for (final slot in roomSlotStarts(day: day, openMinute: f.start, closeMinute: f.end, duration: service.duration)) {
           if (slot.isBefore(t)) continue;
           if (_deviceFree(service, slot, holds, excludeId: excludeId)) return slot;
         }
@@ -911,7 +911,7 @@ class BookingService extends ChangeNotifier {
     final keep = keepSlot == null ? null : DateTime(keepSlot.year, keepSlot.month, keepSlot.day, keepSlot.hour, keepSlot.minute);
     final out = <DateTime>{};
     for (final f in fasce) {
-      for (var t = d.add(Duration(minutes: f.$1)); !t.add(service.duration).isAfter(d.add(Duration(minutes: f.$2))); t = t.add(slotStep)) {
+      for (final t in roomSlotStarts(day: d, openMinute: f.$1, closeMinute: f.$2, duration: service.duration)) {
         final isKeep = keep != null && t == keep;
         if ((t.isAfter(now) || isKeep) && _slotOk(service, t, t.add(service.duration), appts, blocks, busy, excludeId: excludeId, deviceHolds: deviceHolds) && (isKeep || personOk(t))) out.add(t);
       }
@@ -977,7 +977,7 @@ class BookingService extends ChangeNotifier {
     final clienteUid = await _customerUid();
     final ref = _appts.doc();
     final metodo = (metodoPagamento == null || metodoPagamento.trim().isEmpty) ? null : metodoPagamento.trim().toLowerCase();
-    final paid = pagato || metodo == 'carta' || metodo == 'bancomat';
+    final paid = pagato || metodo == 'carta' || metodo == 'contanti' || metodo == 'bancomat';
     final devId = service.usesDevice ? service.deviceId : null;
     final devHours = service.usesDevice ? service.deviceHoldHours : null;
     var a = Appointment(id: ref.id, service: service, start: start, customerName: name, phone: phone, email: mail, codiceFiscale: cf,

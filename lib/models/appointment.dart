@@ -23,7 +23,7 @@ class Appointment {
   final String? ricettaNote;
   final bool ricettaFoto;
   final bool pagato;
-  /// `carta` | `bancomat` se pagato al banco; null se non pagato / non indicato.
+  /// `carta` | `contanti` se pagato al banco (`bancomat` solo su prenotazioni vecchie); null se non pagato / non indicato.
   final String? metodoPagamento;
   /// UID Firebase Auth email/password collegato dalla function (non dall'app).
   final String? clienteUid;
