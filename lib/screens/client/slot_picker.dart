@@ -77,7 +77,7 @@ class _SlotPickerState extends State<SlotPicker> {
       final all = await bookingService.daysWithAvailability(daysAhead: 60);
       final forService = [for (final d in all) if (widget.service.availableOn(d.weekday)) d];
       // Non calcola tutti i giorni della striscia: solo il primo prenotabile (cache per il FutureBuilder).
-      var selected = await bookingService.firstBookableDay(widget.service, daysAhead: 60);
+      var selected = await bookingService.firstBookableDay(widget.service, daysAhead: 60, clientLead: !widget.fromStaff);
       List<DateTime> shown = const [];
       if (widget.fromStaff) {
         final t = DateTime.now();
@@ -115,7 +115,7 @@ class _SlotPickerState extends State<SlotPicker> {
   final Map<DateTime, List<(String, String)>> _free = {};
 
   Future<(List<DateTime>, bool)> _load(DateTime d) async {
-    final slots = await bookingService.availableSlots(widget.service, d);
+    final slots = await bookingService.availableSlots(widget.service, d, clientLead: !widget.fromStaff);
     var noFasce = false;
     if (widget.fromStaff && slots.isEmpty) noFasce = (await bookingService.availability(d)).isEmpty;
     if (widget.fromStaff) {

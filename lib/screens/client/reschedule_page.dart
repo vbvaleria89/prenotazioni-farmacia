@@ -62,7 +62,7 @@ class _ReschedulePageState extends State<ReschedulePage> {
         days = ds;
         day = selected;
         loading = false;
-        _dayFuture = bookingService.availableSlots(a.service, selected, excludeId: a.id);
+        _dayFuture = bookingService.availableSlots(a.service, selected, excludeId: a.id, clientLead: !widget.asStaff);
       });
       final i = ds.indexWhere((d) => _sameDay(d, selected));
       if (i >= 0 && i + 1 < ds.length) {
@@ -130,7 +130,7 @@ class _ReschedulePageState extends State<ReschedulePage> {
                   onSelected: (d) {
                     setState(() {
                       day = d;
-                      _dayFuture = bookingService.availableSlots(a.service, d, excludeId: a.id);
+                      _dayFuture = bookingService.availableSlots(a.service, d, excludeId: a.id, clientLead: !widget.asStaff);
                     });
                     final i = days.indexWhere((x) => _sameDay(x, d));
                     if (i >= 0 && i + 1 < days.length) {

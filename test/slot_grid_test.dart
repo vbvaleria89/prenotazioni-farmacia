@@ -19,6 +19,24 @@ void main() {
     expect(slots, [DateTime(2026, 11, 11, 9, 0)]);
   });
 
+  test('fasce di persone diverse diventano una sola apertura', () {
+    final open = mergeOpenMinutes([(9 * 60, 13 * 60), (9 * 60 + 15, 18 * 60), (14 * 60, 16 * 60)]);
+    expect(open, [(9 * 60, 18 * 60)]);
+    final slots = roomSlotStarts(day: day, openMinute: open.first.$1, closeMinute: open.first.$2, duration: const Duration(minutes: 30));
+    expect(slots.first, DateTime(2026, 11, 11, 9, 0));
+    expect(slots[1], DateTime(2026, 11, 11, 9, 30));
+    expect(slots.contains(DateTime(2026, 11, 11, 9, 15)), isFalse);
+  });
+
+  test('il cliente non vede uno slot prima della durata', () {
+    final now = DateTime(2026, 11, 11, 10, 7);
+    final slots = [
+      DateTime(2026, 11, 11, 10, 30),
+      DateTime(2026, 11, 11, 11, 0),
+    ];
+    expect(slotsForClient(slots, now, const Duration(minutes: 30)), [DateTime(2026, 11, 11, 11, 0)]);
+  });
+
   test('servizio da 15 min resta ogni 15 minuti', () {
     final slots = roomSlotStarts(day: day, openMinute: 9 * 60, closeMinute: 10 * 60, duration: const Duration(minutes: 15));
     expect(slots, [

@@ -705,8 +705,9 @@ class BookingService extends ChangeNotifier {
       if (!service.availableOn(day.weekday)) continue;
       final fl = await _fasceFor(service, day);
       if (fl.isEmpty) continue;
-      for (final f in fl) {
-        for (final slot in roomSlotStarts(day: day, openMinute: f.start, closeMinute: f.end, duration: service.duration)) {
+      final open = mergeOpenMinutes([for (final f in fl) (f.start, f.end)]);
+      for (final f in open) {
+        for (final slot in roomSlotStarts(day: day, openMinute: f.$1, closeMinute: f.$2, duration: service.duration)) {
           if (slot.isBefore(t)) continue;
           if (_deviceFree(service, slot, holds, excludeId: excludeId)) return slot;
         }
@@ -853,14 +854,14 @@ class BookingService extends ChangeNotifier {
 
   /// Primo giorno futuro con fasce e, se possibile, almeno uno slot libero per [service].
   /// Se tutti i giorni con fasce sono pieni, torna comunque il primo con fasce compatibili.
-  Future<DateTime?> firstBookableDay(ServiceType service, {int daysAhead = 60}) async {
+  Future<DateTime?> firstBookableDay(ServiceType service, {int daysAhead = 60, bool clientLead = false}) async {
     final candidates = await daysWithAvailability(daysAhead: daysAhead);
     unawaited(staffServices());
     DateTime? firstWithFasce;
     for (final d in candidates) {
       if (!service.availableOn(d.weekday)) continue;
       firstWithFasce ??= d;
-      final slots = await availableSlots(service, d);
+      final slots = await availableSlots(service, d, clientLead: clientLead);
       if (slots.isNotEmpty) return d;
     }
     return firstWithFasce;
@@ -869,12 +870,13 @@ class BookingService extends ChangeNotifier {
   /// Slot liberi se almeno una stanza ammessa dal servizio è libera in quell'orario.
   /// [excludeId] ignora quella prenotazione (modifica).
   /// [keepSlot] resta selezionabile anche se nel passato (slot attuale in modifica).
-  Future<List<DateTime>> availableSlots(ServiceType service, DateTime day, {String? excludeId, DateTime? keepSlot}) async {
+  /// [clientLead]: il cliente non vede slot che iniziano prima della durata del servizio.
+  Future<List<DateTime>> availableSlots(ServiceType service, DateTime day, {String? excludeId, DateTime? keepSlot, bool clientLead = false}) async {
     await ensureClientAuth();
     if (!service.availableOn(day.weekday)) return [];
     final cacheKey = _slotsCacheKey(service, day, excludeId: excludeId, keepSlot: keepSlot);
     final memo = _slotsCache[cacheKey];
-    if (memo != null) return List<DateTime>.of(memo.$1);
+    if (memo != null) return _applyClientLead(memo.$1, service, clientLead);
 
     _slotQueries = 0;
     final sw = Stopwatch()..start();
@@ -889,7 +891,7 @@ class BookingService extends ChangeNotifier {
       debugPrint('slot ${availKey(day)} ${service.id}: ${lastSlotMs}ms queries=$lastSlotQueryCount slots=0 (niente fasce)');
       return const [];
     }
-    final fasce = [for (final f in fl) (f.start, f.end)];
+    final fasce = mergeOpenMinutes([for (final f in fl) (f.start, f.end)]);
     final deviceFut = service.usesDevice
         ? _loadDeviceHoldsAround(_d0(day).add(const Duration(hours: 12)), service.deviceHoldHours + 12)
         : Future<List<DeviceHold>>.value(const []);
@@ -928,7 +930,13 @@ class BookingService extends ChangeNotifier {
     lastSlotQueryCount = _slotQueries;
     lastSlotMs = sw.elapsedMilliseconds;
     debugPrint('slot ${availKey(day)} ${service.id}: ${lastSlotMs}ms queries=$lastSlotQueryCount slots=${slots.length}');
-    return List<DateTime>.of(slots);
+    return _applyClientLead(slots, service, clientLead);
+  }
+
+  List<DateTime> _applyClientLead(List<DateTime> slots, ServiceType service, bool clientLead) {
+    final copy = List<DateTime>.of(slots);
+    if (!clientLead) return copy;
+    return slotsForClient(copy, DateTime.now(), service.duration);
   }
 
   Future<String?> _customerUid() async {
@@ -957,6 +965,10 @@ class BookingService extends ChangeNotifier {
     final cf = normalizeCodiceFiscale(codiceFiscale);
     if (!isValidCodiceFiscale(cf)) throw StateError('Codice fiscale non valido');
     final end = start.add(service.duration);
+    final staffBooking = await _isActiveStaff();
+    if (!staffBooking && start.isBefore(DateTime.now().add(service.duration))) {
+      throw StateError('Puoi prenotare a partire da ${service.duration.inMinutes} minuti da adesso');
+    }
     // Staff/admin: orario a mano ammesso solo nei giorni SENZA fasce di disponibilità.
     final manualOk = manualTime && (await availability(start)).isEmpty;
     if (!manualOk) {
@@ -1168,8 +1180,10 @@ class BookingService extends ChangeNotifier {
     if (!staff && !a.clientMayCancel()) {
       throw StateError('Non è possibile riprogrammare la prenotazione a meno di 24 ore dall\'inizio. Contatta la farmacia.');
     }
-    if (!staff && start.isBefore(DateTime.now())) throw StateError('Orario già passato');
     final service = a.service;
+    if (!staff && start.isBefore(DateTime.now().add(service.duration))) {
+      throw StateError('Puoi prenotare a partire da ${service.duration.inMinutes} minuti da adesso');
+    }
     final end = start.add(a.end.difference(a.start));
     if (start == a.start) return a;
     await _checkAvailable(start, end, service);
