@@ -253,6 +253,29 @@ async function accessTokenFromSecret(secret, config, fetchImpl) {
   return { accessToken: data.access_token, rotatedRefresh: next };
 }
 
+// Google risponde invalid_grant quando il refresh token è scaduto (app OAuth in «Testing»: 7 giorni)
+// o revocato. Lo segno su Firestore così l'app può avvisare gli admin di ricollegare.
+export function isRevokedTokenError(e) {
+  return String(e?.message || '') === 'invalid_grant';
+}
+
+async function markTokenProblem(db, e) {
+  if (!isRevokedTokenError(e)) return;
+  try {
+    await db.doc(SECRETS_PATH).set({
+      tokenError: 'expired_or_revoked',
+      tokenErrorAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch { /* best effort */ }
+}
+
+async function clearTokenProblem(db, secret) {
+  if (!secret?.tokenError) return;
+  try {
+    await db.doc(SECRETS_PATH).set({ tokenError: FieldValue.delete(), tokenErrorAt: FieldValue.delete() }, { merge: true });
+  } catch { /* best effort */ }
+}
+
 async function persistRotated(db, rotatedRefresh) {
   if (!rotatedRefresh) return;
   await db.doc(SECRETS_PATH).set({
@@ -334,11 +357,13 @@ export async function handleGcalSync(req, deps = {}) {
   let tokens;
   try { tokens = await accessTokenFromSecret(secret, config, fetchImpl); }
   catch (e) {
-    console.error(JSON.stringify({ event: 'gcal_token_failed', status: e.status || 0 }));
-    return json({ error: 'not_connected' }, 503);
+    console.error(JSON.stringify({ event: 'gcal_token_failed', status: e.status || 0, code: e.message }));
+    await markTokenProblem(sdk.db, e);
+    return json({ error: isRevokedTokenError(e) ? 'token_expired' : 'not_connected' }, 503);
   }
   if (tokens.error) return json({ error: 'not_connected' }, 503);
   await persistRotated(sdk.db, tokens.rotatedRefresh);
+  await clearTokenProblem(sdk.db, secret);
   try {
     const result = await syncAppointmentRecord({
       db: sdk.db, data, id, accessToken: tokens.accessToken,
@@ -399,9 +424,14 @@ export async function handleGcalReconcile(req, deps = {}) {
   const secret = await readSecret(sdk.db);
   let tokens;
   try { tokens = await accessTokenFromSecret(secret, config, fetchImpl); }
-  catch { return json({ error: 'not_connected' }, 503); }
+  catch (e) {
+    console.error(JSON.stringify({ event: 'gcal_reconcile_token_failed', status: e.status || 0, code: e.message }));
+    await markTokenProblem(sdk.db, e);
+    return json({ error: isRevokedTokenError(e) ? 'token_expired' : 'not_connected' }, 503);
+  }
   if (tokens.error) return json({ error: 'not_connected' }, 503);
   await persistRotated(sdk.db, tokens.rotatedRefresh);
+  await clearTokenProblem(sdk.db, secret);
   const result = await reconcileAppointments({
     db: sdk.db, accessToken: tokens.accessToken, calendarId: config.calendarId, fetchImpl,
   });
@@ -421,11 +451,31 @@ export async function handleGcalStatus(req, deps = {}) {
   const emp = await sdk.db.doc(`employees/${user.uid}`).get();
   if (!emp.exists || emp.data()?.attivo === false) return json({ error: 'forbidden' }, 403);
   const secret = await readSecret(sdk.db);
-  const connected = Boolean(String(secret.refreshToken || '').trim());
+  const hasToken = Boolean(String(secret.refreshToken || '').trim());
+  let expired = hasToken && Boolean(secret.tokenError);
+  const config = calendarConfig(env);
+  // Controllo «vivo»: provo davvero il refresh, così lo stato non resta «collegato» con un token scaduto.
+  if (hasToken && config.clientSecret) {
+    const fetchImpl = deps.fetch ?? fetch;
+    try {
+      const tokens = await accessTokenFromSecret(secret, config, fetchImpl);
+      await persistRotated(sdk.db, tokens.rotatedRefresh);
+      await clearTokenProblem(sdk.db, secret);
+      expired = false;
+    } catch (e) {
+      if (isRevokedTokenError(e)) {
+        expired = true;
+        await markTokenProblem(sdk.db, e);
+      }
+      // errori di rete/transitori: tengo l'ultimo stato noto
+    }
+  }
+  const connected = hasToken && !expired;
   return json({
     ok: true,
     connected,
-    email: connected ? (secret.email || calendarConfig(env).expectedEmail) : null,
+    reason: connected ? null : (expired ? 'expired' : 'not_connected'),
+    email: hasToken ? (secret.email || config.expectedEmail) : null,
     connectedAt: secret.connectedAt?.toDate?.()?.toISOString?.() || null,
     isAdmin: emp.data()?.ruolo === 'admin',
   });
@@ -514,6 +564,8 @@ export async function handleGcalOauthCallback(req, deps = {}) {
     connectedAt: FieldValue.serverTimestamp(),
     connectedBy: pending.uid || null,
     pendingOauth: FieldValue.delete(),
+    tokenError: FieldValue.delete(),
+    tokenErrorAt: FieldValue.delete(),
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
   try {

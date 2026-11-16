@@ -17,6 +17,7 @@ import 'staff_notices.dart';
 import 'staff_notifications.dart';
 import 'staff_today.dart';
 import '../../widgets/staff_idle_guard.dart';
+import '../../widgets/gcal_alert_banner.dart';
 import '../../services/auth_persistence.dart';
 
 /// Home staff/admin: griglia di tasti grandi, pensata per il desktop.
@@ -29,6 +30,7 @@ class StaffHub extends StatefulWidget {
 
 class _StaffHubState extends State<StaffHub> {
   Employee? _updatedEmployee;
+  int _gcalCheck = 0;
   @override
   void initState() {
     super.initState();
@@ -90,6 +92,13 @@ class _StaffHubState extends State<StaffHub> {
           ),
         ]),
         const SizedBox(height: 8),
+        if (e.isAdmin) GcalAlertBanner(
+          key: ValueKey(_gcalCheck),
+          onReconnect: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (_) => StaffToday(employee: e)));
+            if (mounted) setState(() => _gcalCheck++);
+          },
+        ),
         Text('Buongiorno', style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Brand.primary, fontWeight: FontWeight.w800)),
         const SizedBox(height: 16),
         LayoutBuilder(builder: (context, c) {

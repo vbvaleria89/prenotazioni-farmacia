@@ -284,3 +284,29 @@ test('gcal-status e oauth-start: solo staff/admin', async () => {
   assert.match(uj.url, /accounts\.google\.com/);
   assert.equal(admin.store.get('serverSecrets/gcal').pendingOauth.state.length, 48);
 });
+
+test('token scaduto (invalid_grant): status scollegato, sync/reconcile 503 token_expired e flag su Firestore', async () => {
+  const f = fixture({ caller: 'admin1' });
+  const okFetch = f.deps.fetch;
+  f.deps.fetch = async (url, opts) => {
+    if (String(url).includes('oauth2.googleapis.com/token')) {
+      return new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'Token has been expired or revoked.' }), { status: 400 });
+    }
+    return okFetch(url, opts);
+  };
+  const st = await handleGcalStatus(request('/api/gcal-status', { method: 'GET', token: 'ok' }), f.deps);
+  const sj = await st.json();
+  assert.equal(sj.connected, false);
+  assert.equal(sj.reason, 'expired');
+  assert.equal(f.store.get('serverSecrets/gcal').tokenError, 'expired_or_revoked');
+  const sync = await handleGcalSync(request('/api/gcal-sync', { token: 'ok', body: { appointmentId: id } }), f.deps);
+  assert.equal(sync.status, 503);
+  assert.equal((await sync.json()).error, 'token_expired');
+  const rec = await handleGcalReconcile(request('/api/gcal-reconcile', { method: 'GET', cron: 'cron-s' }), f.deps);
+  assert.equal(rec.status, 503);
+  // Token di nuovo valido: il flag sparisce.
+  f.deps.fetch = okFetch;
+  const st2 = await (await handleGcalStatus(request('/api/gcal-status', { method: 'GET', token: 'ok' }), f.deps)).json();
+  assert.equal(st2.connected, true);
+  assert.equal(f.store.get('serverSecrets/gcal').tokenError, undefined);
+});

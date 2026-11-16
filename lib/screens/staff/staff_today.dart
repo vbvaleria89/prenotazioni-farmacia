@@ -25,6 +25,7 @@ class _StaffTodayState extends State<StaffToday> {
   bool _statusLoading = true;
   bool _serverConnected = false;
   String? _connectedEmail;
+  String? _reason;
 
   @override
   void initState() {
@@ -45,6 +46,7 @@ class _StaffTodayState extends State<StaffToday> {
         setState(() {
           _serverConnected = j['connected'] == true;
           _connectedEmail = j['email'] as String?;
+          _reason = j['reason'] as String?;
           _statusLoading = false;
         });
         return;
@@ -90,6 +92,10 @@ class _StaffTodayState extends State<StaffToday> {
         ? 'Verifico il collegamento a Google Calendar…'
         : ok
             ? 'Google Calendar collegato come ${_connectedEmail ?? 'account farmacia'}: le prenotazioni si sincronizzano da sole.'
+            : _reason == 'expired'
+                ? (admin
+                    ? 'Google Calendar scollegato: il collegamento è scaduto o revocato. Premi «Ricollega Google Calendar» e accedi con farmaciasanciro.servizi@gmail.com.'
+                    : 'Google Calendar scollegato: il collegamento è scaduto. Chiedi a un amministratore di ricollegarlo.')
             : admin
                 ? 'Google Calendar non collegato. Premi il pulsante e accedi con farmaciasanciro.servizi@gmail.com.'
                 : 'Google Calendar non collegato. Chiedi a un amministratore di collegarlo una volta sola.';
@@ -105,7 +111,7 @@ class _StaffTodayState extends State<StaffToday> {
             child: FilledButton.icon(
                 onPressed: _busy ? null : _connect,
                 icon: const Icon(Icons.calendar_month),
-                label: Text(ok ? 'Ricollega Google Calendar' : 'Collega Google Calendar', style: const TextStyle(fontSize: 16))),
+                label: Text(ok || _reason == 'expired' ? 'Ricollega Google Calendar' : 'Collega Google Calendar', style: const TextStyle(fontSize: 16))),
           ),
           if (admin || ok) TextButton(onPressed: _statusLoading ? null : _refreshStatus, child: const Text('Aggiorna stato')),
         ]),
