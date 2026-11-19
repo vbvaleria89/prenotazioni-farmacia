@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   eventFromAppointment, shortCode, stanzaLabel, shouldHaveEvent, authorizationUrl,
   handleGcalSync, handleGcalReconcile, handleGcalStatus, handleGcalOauthStart,
-  DEFAULT_CALENDAR_ID, DEFAULT_EXPECTED_EMAIL, GCAL_SCOPE,
+  DEFAULT_CALENDAR_ID, DEFAULT_EXPECTED_EMAIL, GCAL_SCOPE, EVENT_COLOR_ID,
 } from './gcal.mjs';
 
 const id = 'AbCdEfGh1234567890xy';
@@ -38,6 +38,8 @@ test('mapping evento: titolo Nome · Servizio e descrizione con telefono cliccab
   ].join('\n'));
   assert.equal(ev.start, '2026-11-09T15:00:00.000Z');
   assert.equal(ev.end, '2026-11-09T15:20:00.000Z');
+  assert.equal(ev.colorId, '1');
+  assert.equal(EVENT_COLOR_ID, '1');
   assert.doesNotMatch(JSON.stringify(ev), /RSSMRA80A01H501U/);
 });
 
@@ -212,6 +214,36 @@ test('gcal-sync: crea evento e salva calendarEventId', async () => {
   assert.match(payload.description, /Operatore: Luigi/);
   assert.match(payload.description, /Servizio: ECG/);
   assert.match(payload.description, /Codice: ABCDEF/);
+  assert.equal(payload.colorId, '1');
+});
+
+test('gcal-sync: aggiorna evento esistente e imposta colorId Lavanda', async () => {
+  const f = fixture({ appt: {
+    createdBy: 'staff1', status: 'confermato', calendarEventId: 'evt-old',
+    servizioNome: 'ECG', roomId: 1, start: new Date('2026-11-13T08:00:00Z'),
+    end: new Date('2026-11-13T08:10:00Z'),
+  } });
+  const r = await handleGcalSync(request('/api/gcal-sync', { token: 'ok', body: { appointmentId: id } }), f.deps);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).action, 'updated');
+  const patch = f.calls.find((c) => c.method === 'PATCH' && String(c.url).includes('/events'));
+  const payload = JSON.parse(patch.body);
+  assert.equal(payload.colorId, '1');
+  assert.equal(payload.summary, 'Cliente · ECG');
+});
+
+test('gcal-reconcile: eventi già presenti vengono aggiornati con colorId', async () => {
+  const f = fixture({ appt: {
+    createdBy: 'staff1', status: 'confermato', calendarEventId: 'evt-old',
+    servizioNome: 'ECG', roomId: 1, start: new Date(), end: new Date(),
+  } });
+  const r = await handleGcalReconcile(request('/api/gcal-reconcile', { method: 'GET', cron: 'cron-s' }), f.deps);
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.updated, 1);
+  assert.equal(body.skipped, 0);
+  const patch = f.calls.find((c) => c.method === 'PATCH' && String(c.url).includes('/events'));
+  assert.equal(JSON.parse(patch.body).colorId, '1');
 });
 
 test('gcal-sync: annullata elimina l\'evento', async () => {

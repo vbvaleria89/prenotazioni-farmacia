@@ -19,6 +19,8 @@ export const GCAL_SCOPE = [
   'email',
 ].join(' ');
 export const SECRETS_PATH = 'serverSecrets/gcal';
+// Google Calendar event color: 1 = Lavanda / Lavender.
+export const EVENT_COLOR_ID = '1';
 export const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 export const CALENDAR_API = 'https://www.googleapis.com/calendar/v3';
 export const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
@@ -139,6 +141,7 @@ export function eventFromAppointment(id, data) {
     description: lines.join('\n'),
     start: start ? start.toISOString() : null,
     end: end ? end.toISOString() : null,
+    colorId: EVENT_COLOR_ID,
   };
 }
 
@@ -287,7 +290,13 @@ async function persistRotated(db, rotatedRefresh) {
 export async function upsertCalendarEvent({ data, id, eventId, accessToken, calendarId, fetchImpl }) {
   const ev = eventFromAppointment(id, data);
   if (!ev.start || !ev.end) throw new Error('missing_dates');
-  const body = { summary: ev.summary, description: ev.description, start: { dateTime: ev.start }, end: { dateTime: ev.end } };
+  const body = {
+    summary: ev.summary,
+    description: ev.description,
+    start: { dateTime: ev.start },
+    end: { dateTime: ev.end },
+    colorId: ev.colorId || EVENT_COLOR_ID,
+  };
   const encCal = encodeURIComponent(calendarId);
   const path = `/calendars/${encCal}/events`;
   if (eventId && !String(eventId).startsWith('mock-')) {
