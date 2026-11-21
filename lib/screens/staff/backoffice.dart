@@ -63,6 +63,7 @@ class _BackofficeState extends State<_BackofficeBody> {
   final _waMsg = TextEditingController();
   int _open = 9, _close = 19;
   bool _importingColors = false;
+  bool _pushingColors = false;
 
   @override
   void initState() {
@@ -100,7 +101,74 @@ class _BackofficeState extends State<_BackofficeBody> {
             onChanged: (x) => setState(() => f(x!))),
       ]);
 
-  void _edit(ServiceType? s, int nextOrder) => showDialog(context: context, builder: (_) => _ServiceDialog(service: s, nextOrder: nextOrder));
+  void _edit(ServiceType? s, int nextOrder) => showDialog(
+        context: context,
+        builder: (_) => _ServiceDialog(
+          service: s,
+          nextOrder: nextOrder,
+          onSaved: (svc) => _pushColorsToGoogle(serviceId: svc.id, quiet: true),
+        ),
+      );
+
+  Future<void> _pushColorsToGoogle({String? serviceId, bool quiet = false}) async {
+    if (_pushingColors && !quiet) return;
+    if (!quiet) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('Allinea colori su Google'),
+          content: const Text(
+            'Aggiorna gli eventi già presenti su Google Calendar con i colori dei servizi dell\'app.\n\n'
+            'In futuro, salvando un servizio, l\'allineamento di quel servizio parte da solo.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annulla')),
+            FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Allinea')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    final m = ScaffoldMessenger.of(context);
+    if (!quiet) setState(() => _pushingColors = true);
+    try {
+      final token = await FirebaseAuth.instance.currentUser?.getIdToken();
+      if (token == null) throw StateError('Sessione scaduta');
+      final r = await http.post(
+        Uri.base.resolve('/api/gcal-push-colors'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: jsonEncode({if (serviceId != null && serviceId.isNotEmpty) 'serviceId': serviceId}),
+      ).timeout(const Duration(seconds: 90));
+      final body = r.body.isEmpty ? <String, dynamic>{} : jsonDecode(r.body) as Map<String, dynamic>;
+      if (r.statusCode != 200) {
+        if (quiet) return;
+        final err = body['error']?.toString() ?? 'errore';
+        final msg = switch (err) {
+          'not_connected' || 'token_expired' => 'Google Calendar non collegato o token scaduto. Ricollegalo e riprova.',
+          'forbidden' => 'Solo l\'amministratore può allineare i colori.',
+          _ => 'Allineamento non riuscito ($err).',
+        };
+        m.showSnackBar(SnackBar(content: Text(msg)));
+        return;
+      }
+      if (quiet) {
+        final n = (body['updated'] as num?)?.toInt() ?? 0;
+        if (n > 0) m.showSnackBar(SnackBar(content: Text('Colore aggiornato anche su Google ($n eventi).')));
+        return;
+      }
+      final updated = body['updated'] ?? 0;
+      final created = body['created'] ?? 0;
+      final scanned = body['scanned'] ?? 0;
+      final failed = body['failed'] ?? 0;
+      m.showSnackBar(SnackBar(
+        content: Text('Allineamento Google: $updated aggiornati, $created creati su $scanned${failed == 0 ? '' : ' · $failed non riusciti'}.'),
+      ));
+    } catch (e) {
+      if (!quiet) m.showSnackBar(SnackBar(content: Text('Allineamento non riuscito: $e')));
+    } finally {
+      if (!quiet && mounted) setState(() => _pushingColors = false);
+    }
+  }
 
   Future<void> _importColorsFromGoogle() async {
     if (_importingColors) return;
@@ -197,6 +265,18 @@ class _BackofficeState extends State<_BackofficeBody> {
                     SizedBox(
                       height: 48,
                       width: double.infinity,
+                      child: FilledButton.tonalIcon(
+                        onPressed: _pushingColors ? null : () => _pushColorsToGoogle(),
+                        icon: _pushingColors
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.sync),
+                        label: Text(_pushingColors ? 'Allineamento in corso…' : 'Allinea colori su Google Calendar'),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 48,
+                      width: double.infinity,
                       child: OutlinedButton.icon(
                         onPressed: _importingColors ? null : _importColorsFromGoogle,
                         icon: _importingColors
@@ -208,7 +288,8 @@ class _BackofficeState extends State<_BackofficeBody> {
                     const Padding(
                       padding: EdgeInsets.only(top: 6),
                       child: Text(
-                        'Una tantum: copia sui servizi i colori già usati negli eventi Google. Poi, per i nuovi servizi, scegli il colore qui e l’app lo manda a Google.',
+                        '«Allinea» = app → Google (eventi esistenti). «Importa» = Google → app (una tantum). '
+                        'Salvando un servizio, il colore parte subito anche su Google per quel servizio.',
                         style: TextStyle(fontSize: 12, color: Colors.black54),
                       ),
                     ),
@@ -274,7 +355,8 @@ class _BackofficeState extends State<_BackofficeBody> {
 class _ServiceDialog extends StatefulWidget {
   final ServiceType? service;
   final int nextOrder;
-  const _ServiceDialog({this.service, required this.nextOrder});
+  final ValueChanged<ServiceType>? onSaved;
+  const _ServiceDialog({this.service, required this.nextOrder, this.onSaved});
   @override
   State<_ServiceDialog> createState() => _ServiceDialogState();
 }
@@ -373,10 +455,12 @@ class _ServiceDialogState extends State<_ServiceDialog> {
       stanze: {..._stanzeSel}, deviceId: deviceId, deviceHoldHours: deviceHoldHours,
       colore: color.hex, gcalColorId: color.gcalColorId,
     );
+    final colorChanged = old == null || old.effectiveGcalColorId != s.effectiveGcalColorId;
     try {
       await bookingService.saveService(s);
       nav.pop();
       m.showSnackBar(SnackBar(content: Text('Servizio "${s.name}" salvato')));
+      if (colorChanged) widget.onSaved?.call(s);
     } catch (e) {
       m.showSnackBar(SnackBar(content: Text('Salvataggio non riuscito: $e')));
     }

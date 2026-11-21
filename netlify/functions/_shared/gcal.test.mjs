@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   eventFromAppointment, shortCode, stanzaLabel, shouldHaveEvent, authorizationUrl,
   handleGcalSync, handleGcalReconcile, handleGcalStatus, handleGcalOauthStart,
-  handleGcalImportColors, parseGcalColorId, loadServiceColorId,
+  handleGcalImportColors, handleGcalPushColors, parseGcalColorId, loadServiceColorId,
   serviceNameFromEvent, majorityFromVotes, addColorVote, hexForGcalColorId,
   DEFAULT_CALENDAR_ID, DEFAULT_EXPECTED_EMAIL, GCAL_SCOPE, EVENT_COLOR_ID,
 } from './gcal.mjs';
@@ -440,4 +440,31 @@ test('gcal-import-colors: solo admin; importa colorId da eventi Google sui servi
   assert.equal(f.store.get('services/holter').colore, '#FF887C');
   assert.equal(f.store.get('services/analisi').gcalColorId, '10');
   assert.equal(f.store.get('services/analisi').colore, '#51B749');
+});
+
+test('gcal-push-colors: solo admin; aggiorna colorId sugli eventi dal servizio', async () => {
+  const staff = fixture({ caller: 'staff1' });
+  assert.equal((await handleGcalPushColors(request('/api/gcal-push-colors', { token: 'ok' }), staff.deps)).status, 403);
+
+  const f = fixture({
+    caller: 'admin1',
+    appt: {
+      createdBy: 'staff1', status: 'confermato', calendarEventId: 'evt-holter',
+      servizio: 'holter', servizioNome: 'Holter Cardiaco', roomId: 1,
+      start: new Date(), end: new Date(),
+    },
+    services: [
+      ['services/holter', { nome: 'Holter Cardiaco', gcalColorId: '4', colore: '#FF887C' }],
+    ],
+  });
+  const r = await handleGcalPushColors(request('/api/gcal-push-colors', {
+    token: 'ok', body: { serviceId: 'holter' },
+  }), f.deps);
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.scanned, 1, JSON.stringify(body));
+  assert.equal(body.updated + body.created, 1, JSON.stringify(body));
+  const write = f.calls.find((c) => (c.method === 'PATCH' || c.method === 'POST') && String(c.url).includes('/events'));
+  assert.equal(JSON.parse(write.body).colorId, '4');
 });
