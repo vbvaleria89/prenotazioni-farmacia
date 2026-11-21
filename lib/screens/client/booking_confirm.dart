@@ -86,10 +86,6 @@ class _BookingConfirmState extends State<BookingConfirm> {
   Future<void> _submit() async {
     if (!_form.currentState!.validate()) return;
     final messenger = ScaffoldMessenger.of(context);
-    if (_esenzione && _foto == null) {
-      messenger.showSnackBar(const SnackBar(content: Text('Aggiungi la foto della ricetta/impegnativa')));
-      return;
-    }
     if (_busy) return;
     setState(() { _busy = true; _loading = 'Salvataggio prenotazione…'; });
     await Future<void>.delayed(const Duration(milliseconds: 16));
@@ -387,7 +383,9 @@ class _BookingConfirmState extends State<BookingConfirm> {
             child: SwitchListTile(
               activeThumbColor: Brand.green,
               title: const Text('Prenotazione con esenzione', style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: Text(_esenzione ? 'Sì: inserisci i dati dell\'impegnativa e una foto' : 'No, senza esenzione'),
+              subtitle: Text(_esenzione
+                  ? 'Sì: puoi inserire i dati ora oppure dopo con il pulsante Ricetta'
+                  : 'No, senza esenzione'),
               value: _esenzione,
               onChanged: (v) => setState(() => _esenzione = v),
             ),
@@ -397,6 +395,9 @@ class _BookingConfirmState extends State<BookingConfirm> {
               padding: const EdgeInsets.all(12),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 const Text('Impegnativa / ricetta', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF32448C))),
+                const Text('Facoltativo in questa fase: dopo la prenotazione usa il pulsante Ricetta.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54)),
+                const SizedBox(height: 8),
                 TextFormField(controller: _ricetta, textCapitalization: TextCapitalization.characters,
                     decoration: const InputDecoration(labelText: 'Numero ricetta (NRE) / codice impegnativa (facoltativo)')),
                 TextFormField(controller: _note, maxLines: 2, decoration: const InputDecoration(labelText: 'Codice esenzione / note (facoltativo)')),
@@ -410,7 +411,6 @@ class _BookingConfirmState extends State<BookingConfirm> {
                   const SizedBox(width: 8),
                   Expanded(child: OutlinedButton.icon(onPressed: () => _pick(ImageSource.gallery), icon: const Icon(Icons.upload_file), label: const Text('Carica'))),
                 ]),
-                if (_foto == null) const Padding(padding: EdgeInsets.only(top: 6), child: Text('Foto della ricetta obbligatoria', style: TextStyle(fontSize: 12, color: Colors.black54))),
               ]),
             ),
           ),

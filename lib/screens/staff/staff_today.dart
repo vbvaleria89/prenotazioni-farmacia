@@ -155,6 +155,7 @@ class _Tile extends StatelessWidget {
     final actions = <(String, IconData, Color, VoidCallback?)>[
       ('Correggi dati cliente', Icons.person_outline, const Color(0xFF32448C), () => apriCorrezioneCliente(context, a)),
       if (a.status != AppointmentStatus.annullato) ('Modifica', Icons.edit, const Color(0xFF32448C), () => apriModificaPrenotazione(context, a)),
+      if (a.status != AppointmentStatus.annullato) ('Ricetta', Icons.medication_outlined, const Color(0xFF32448C), () => apriRicetta(context, a)),
       if (a.blocksRoom) ('Riprogramma', Icons.event_repeat, const Color(0xFF32448C), () => apriRiprogramma(context, a, asStaff: true)),
       ('Conferma', Icons.check, Colors.green, a.status == AppointmentStatus.inAttesa ? () => run(() => bookingService.confirm(a)) : null),
       if (a.blocksRoom) ('Annulla', Icons.close, Colors.red, () => annullaPrenotazione(context, a)),
@@ -188,7 +189,7 @@ class _Tile extends StatelessWidget {
                   ? [for (final x in actions) if (x.$1 == 'Segna rimborsato' || x.$1 == 'Correggi dati cliente' || x.$1 == 'WhatsApp') x]
                   : active
                   ? actions
-                  : [for (final x in actions) if (x.$1 == 'Correggi dati cliente' || x.$1 == 'Modifica' || x.$1 == 'WhatsApp' || x.$1 == 'Segna rimborsato') x];
+                  : [for (final x in actions) if (x.$1 == 'Correggi dati cliente' || x.$1 == 'Modifica' || x.$1 == 'Ricetta' || x.$1 == 'WhatsApp' || x.$1 == 'Segna rimborsato') x];
               final btns = [
                 for (final (t, i, col, f) in shown)
                   SizedBox(

@@ -1,13 +1,156 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../app.dart';
 import '../../models/appointment.dart';
 import '../../services/open_link.dart';
 
-/// Dati impegnativa + pulsante foto, per viste staff.
+/// Dialog per inserire o aggiornare impegnativa/ricetta in un secondo momento.
+Future<bool> apriRicetta(BuildContext context, Appointment a) async {
+  if (a.status == AppointmentStatus.annullato) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Prenotazione annullata')));
+    return false;
+  }
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (c) => _RicettaDialog(a),
+  );
+  return ok == true;
+}
+
+class _RicettaDialog extends StatefulWidget {
+  final Appointment a;
+  const _RicettaDialog(this.a);
+  @override
+  State<_RicettaDialog> createState() => _RicettaDialogState();
+}
+
+class _RicettaDialogState extends State<_RicettaDialog> {
+  late bool _esenzione;
+  late final TextEditingController _ricetta;
+  late final TextEditingController _note;
+  Uint8List? _foto;
+  bool _busy = false;
+  String? _pickError;
+
+  @override
+  void initState() {
+    super.initState();
+    // Bottone «Ricetta»: si apre per inserire/aggiornare l'impegnativa.
+    _esenzione = true;
+    _ricetta = TextEditingController(text: widget.a.ricettaNumero ?? '');
+    _note = TextEditingController(text: widget.a.ricettaNote ?? '');
+  }
+
+  @override
+  void dispose() {
+    _ricetta.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pick(ImageSource src) async {
+    setState(() => _pickError = null);
+    try {
+      final f = await ImagePicker().pickImage(source: src, imageQuality: 70, maxWidth: 1600);
+      if (f == null) return;
+      final b = await f.readAsBytes();
+      if (b.length > 650000) {
+        setState(() => _pickError = 'Foto troppo grande, riprova con una più leggera');
+        return;
+      }
+      setState(() => _foto = b);
+    } catch (_) {
+      setState(() => _pickError = 'Impossibile acquisire la foto');
+    }
+  }
+
+  Future<void> _save() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final m = ScaffoldMessenger.of(context);
+    try {
+      await bookingService.updateRicetta(
+        widget.a,
+        esenzione: _esenzione,
+        ricettaNumero: _esenzione && _ricetta.text.trim().isNotEmpty ? _ricetta.text.trim() : null,
+        ricettaNote: _esenzione && _note.text.trim().isNotEmpty ? _note.text.trim() : null,
+        ricettaFotoB64: _esenzione && _foto != null ? base64Encode(_foto!) : null,
+        keepExistingFoto: _foto == null,
+      );
+      if (!mounted) return;
+      m.showSnackBar(SnackBar(content: Text(_esenzione ? 'Ricetta salvata' : 'Esenzione rimossa')));
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) m.showSnackBar(SnackBar(content: Text('Salvataggio non riuscito: $e')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final a = widget.a;
+    return AlertDialog(
+      title: const Text('Ricetta'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text('${a.service.name} · ${a.customerName}', style: const TextStyle(fontSize: 13, color: Colors.black54)),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              activeThumbColor: const Color(0xFF2E9E4F),
+              title: const Text('Con esenzione / impegnativa'),
+              value: _esenzione,
+              onChanged: (v) => setState(() => _esenzione = v),
+            ),
+            if (_esenzione) ...[
+              TextFormField(
+                controller: _ricetta,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'Numero ricetta (NRE) (facoltativo)', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _note,
+                maxLines: 2,
+                decoration: const InputDecoration(labelText: 'Note / codice esenzione (facoltativo)', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              if (_foto != null) ...[
+                ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.memory(_foto!, height: 160, fit: BoxFit.contain)),
+                TextButton.icon(onPressed: () => setState(() => _foto = null), icon: const Icon(Icons.delete_outline), label: const Text('Rimuovi nuova foto')),
+              ] else if (a.ricettaFoto)
+                const Text('Foto già presente: puoi lasciarla o caricarne una nuova.', style: TextStyle(fontSize: 12, color: Colors.black54)),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: OutlinedButton.icon(onPressed: _busy ? null : () => _pick(ImageSource.camera), icon: const Icon(Icons.photo_camera), label: const Text('Scatta'))),
+                const SizedBox(width: 8),
+                Expanded(child: OutlinedButton.icon(onPressed: _busy ? null : () => _pick(ImageSource.gallery), icon: const Icon(Icons.upload_file), label: const Text('Carica'))),
+              ]),
+              if (_pickError != null)
+                Padding(padding: const EdgeInsets.only(top: 6), child: Text(_pickError!, style: const TextStyle(fontSize: 12, color: Colors.red))),
+            ],
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: _busy ? null : () => Navigator.pop(context, false), child: const Text('Annulla')),
+        FilledButton(onPressed: _busy ? null : _save, child: Text(_busy ? 'Salvo…' : 'Salva')),
+      ],
+    );
+  }
+}
+
+/// Dati impegnativa + pulsante Ricetta (inserimento successivo) e foto, per viste staff/cliente.
 class RicettaInfo extends StatelessWidget {
   final Appointment a;
-  const RicettaInfo(this.a, {super.key});
+  /// Se false nasconde il bottone (es. solo lettura).
+  final bool showButton;
+  const RicettaInfo(this.a, {super.key, this.showButton = true});
 
   Future<void> _show(BuildContext context) async {
     final b64 = await bookingService.ricettaFoto(a.id);
@@ -23,16 +166,33 @@ class RicettaInfo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!a.esenzione) return const SizedBox.shrink();
+    final canEdit = showButton && a.status != AppointmentStatus.annullato;
+    final hasData = a.esenzione;
+    if (!hasData && !canEdit) return const SizedBox.shrink();
+    final label = a.esenzione
+        ? ((a.ricettaNumero ?? '').isNotEmpty || a.ricettaFoto ? 'Modifica ricetta' : 'Inserisci ricetta')
+        : 'Ricetta';
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, children: [
-        Text('Ricetta: ${a.ricettaNumero ?? '—'}${(a.ricettaNote ?? '').isNotEmpty ? ' · ${a.ricettaNote}' : ''}',
-            style: const TextStyle(fontSize: 13, color: Color(0xFF32448C))),
+        if (a.esenzione)
+          Text(
+            (a.ricettaNumero ?? '').isEmpty && !a.ricettaFoto
+                ? 'Ricetta: da inserire'
+                : 'Ricetta: ${a.ricettaNumero ?? '—'}${(a.ricettaNote ?? '').isNotEmpty ? ' · ${a.ricettaNote}' : ''}',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF32448C)),
+          ),
         if (a.ricettaFoto)
           TextButton.icon(
             style: TextButton.styleFrom(foregroundColor: const Color(0xFF2E9E4F), visualDensity: VisualDensity.compact),
             onPressed: () => _show(context), icon: const Icon(Icons.image, size: 18), label: const Text('Vedi foto')),
+        if (canEdit)
+          TextButton.icon(
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFF32448C), visualDensity: VisualDensity.compact),
+            onPressed: () => apriRicetta(context, a),
+            icon: const Icon(Icons.medication_outlined, size: 18),
+            label: Text(label),
+          ),
       ]),
     );
   }

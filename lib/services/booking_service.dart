@@ -1692,8 +1692,77 @@ class BookingService extends ChangeNotifier {
     return controller.stream;
   }
 
-  /// Foto ricetta (JPEG base64) salvata in `ricette/{appointmentId}`; solo staff.
+  /// Foto ricetta (JPEG base64) salvata in `ricette/{appointmentId}`; solo staff in lettura.
   Future<String?> ricettaFoto(String id) async => (await _db.doc('ricette/$id').get()).data()?['foto'] as String?;
+
+  /// Inserisce o aggiorna impegnativa/ricetta in un secondo momento (cliente o staff).
+  Future<Appointment> updateRicetta(
+    Appointment a, {
+    required bool esenzione,
+    String? ricettaNumero,
+    String? ricettaNote,
+    String? ricettaFotoB64,
+    bool keepExistingFoto = true,
+  }) async {
+    if (a.status == AppointmentStatus.annullato) {
+      throw StateError('Prenotazione annullata: non si può aggiornare la ricetta');
+    }
+    final nre = esenzione && ricettaNumero != null && ricettaNumero.trim().isNotEmpty ? ricettaNumero.trim() : null;
+    final note = esenzione && ricettaNote != null && ricettaNote.trim().isNotEmpty ? ricettaNote.trim() : null;
+    final hasNewFoto = esenzione && ricettaFotoB64 != null && ricettaFotoB64.isNotEmpty;
+    final hasFoto = esenzione && (hasNewFoto || (keepExistingFoto && a.ricettaFoto));
+    await _db.runTransaction((tx) async {
+      tx.update(_appts.doc(a.id), {
+        'esenzione': esenzione,
+        'ricettaNumero': nre,
+        'ricettaNote': note,
+        'ricettaFoto': hasFoto,
+        'updatedBy': _auth.currentUser?.uid,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (hasNewFoto) {
+        tx.set(_db.doc('ricette/${a.id}'), {
+          'foto': ricettaFotoB64,
+          'createdBy': _auth.currentUser?.uid,
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    });
+    notifyListeners();
+    return Appointment(
+      id: a.id,
+      service: a.service,
+      start: a.start,
+      end: a.end,
+      customerName: a.customerName,
+      phone: a.phone,
+      email: a.email,
+      status: a.status,
+      createdBy: a.createdBy,
+      calendarEventId: a.calendarEventId,
+      employeeId: a.employeeId,
+      employeeNome: a.employeeNome,
+      esenzione: esenzione,
+      ricettaNumero: nre,
+      ricettaNote: note,
+      ricettaFoto: hasFoto,
+      pagato: a.pagato,
+      metodoPagamento: a.metodoPagamento,
+      clienteUid: a.clienteUid,
+      clienteAccount: a.clienteAccount,
+      codiceFiscale: a.codiceFiscale,
+      roomId: a.roomId,
+      roomName: a.roomName,
+      deviceId: a.deviceId,
+      deviceHoldHours: a.deviceHoldHours,
+      annullatoDa: a.annullatoDa,
+      annullatoAt: a.annullatoAt,
+      rimborsoRichiesto: a.rimborsoRichiesto,
+      rimborsoStato: a.rimborsoStato,
+      rimborsoAt: a.rimborsoAt,
+      clienteChiamato: a.clienteChiamato,
+    );
+  }
 
   /// Servizio attivo per id (per eventi prenotabili).
   Future<ServiceType?> activeServiceById(String id) async {
