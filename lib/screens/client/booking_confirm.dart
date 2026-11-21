@@ -98,7 +98,7 @@ class _BookingConfirmState extends State<BookingConfirm> {
     try {
       final metodo = widget.fromStaff ? _metodoPagamento : null;
       final a = await bookingService.book(widget.service, widget.start, _name.text.trim(), _phone.text.trim(), codiceFiscale: _cf.text, email: _email.text.trim().isEmpty ? null : _email.text.trim(), esenzione: _esenzione,
-          ricettaNumero: _esenzione ? _ricetta.text.trim() : null,
+          ricettaNumero: _esenzione && _ricetta.text.trim().isNotEmpty ? _ricetta.text.trim() : null,
           ricettaNote: _esenzione && _note.text.trim().isNotEmpty ? _note.text.trim() : null,
           ricettaFotoB64: _esenzione && _foto != null ? base64Encode(_foto!) : null,
           pagato: metodo != null,
@@ -398,8 +398,7 @@ class _BookingConfirmState extends State<BookingConfirm> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 const Text('Impegnativa / ricetta', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF32448C))),
                 TextFormField(controller: _ricetta, textCapitalization: TextCapitalization.characters,
-                    decoration: const InputDecoration(labelText: 'Numero ricetta (NRE) / codice impegnativa *'),
-                    validator: (v) => _esenzione && (v == null || v.trim().length < 4) ? 'Obbligatorio' : null),
+                    decoration: const InputDecoration(labelText: 'Numero ricetta (NRE) / codice impegnativa (facoltativo)')),
                 TextFormField(controller: _note, maxLines: 2, decoration: const InputDecoration(labelText: 'Codice esenzione / note (facoltativo)')),
                 const SizedBox(height: 12),
                 if (_foto != null) ...[
