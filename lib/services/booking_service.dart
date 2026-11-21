@@ -1008,10 +1008,12 @@ class BookingService extends ChangeNotifier {
     final ref = _appts.doc();
     final metodo = (metodoPagamento == null || metodoPagamento.trim().isEmpty) ? null : metodoPagamento.trim().toLowerCase();
     final paid = pagato || metodo == 'carta' || metodo == 'contanti' || metodo == 'bancomat';
+    final nre = esenzione && ricettaNumero != null && ricettaNumero.trim().isNotEmpty ? ricettaNumero.trim() : null;
+    final noteRicetta = esenzione && ricettaNote != null && ricettaNote.trim().isNotEmpty ? ricettaNote.trim() : null;
     final devId = service.usesDevice ? service.deviceId : null;
     final devHours = service.usesDevice ? service.deviceHoldHours : null;
     var a = Appointment(id: ref.id, service: service, start: start, customerName: name, phone: phone, email: mail, codiceFiscale: cf,
-        clienteUid: clienteUid, createdBy: _auth.currentUser?.uid, esenzione: esenzione, ricettaNumero: ricettaNumero, ricettaNote: ricettaNote, ricettaFoto: ricettaFotoB64 != null, pagato: paid, metodoPagamento: paid ? metodo : null, employeeId: empId, employeeNome: empNome, roomId: roomId, deviceId: devId, deviceHoldHours: devHours);
+        clienteUid: clienteUid, createdBy: _auth.currentUser?.uid, esenzione: esenzione, ricettaNumero: nre, ricettaNote: noteRicetta, ricettaFoto: ricettaFotoB64 != null, pagato: paid, metodoPagamento: paid ? metodo : null, employeeId: empId, employeeNome: empNome, roomId: roomId, deviceId: devId, deviceHoldHours: devHours);
     final dayKey = _dayKey(start);
     final assignment = _db.collection('notifications').doc();
     final deviceDays = service.usesDevice ? daysOverlappingHold(start, service.deviceHoldEnd(start)) : const <DateTime>[];
@@ -1044,7 +1046,7 @@ class BookingService extends ChangeNotifier {
       if (current is Map) current.forEach((key, value) => nextBlocks[key.toString()] = value);
       nextBlocks[ref.id] = _blockMap(start, end, AppointmentStatus.inAttesa.name, chosen, empId);
       a = Appointment(id: ref.id, service: service, start: start, customerName: name, phone: phone, email: mail, codiceFiscale: cf,
-          clienteUid: clienteUid, createdBy: _auth.currentUser?.uid, esenzione: esenzione, ricettaNumero: ricettaNumero, ricettaNote: ricettaNote, ricettaFoto: ricettaFotoB64 != null, pagato: paid, metodoPagamento: paid ? metodo : null, employeeId: empId, employeeNome: empNome, roomId: chosen, deviceId: devId, deviceHoldHours: devHours);
+          clienteUid: clienteUid, createdBy: _auth.currentUser?.uid, esenzione: esenzione, ricettaNumero: nre, ricettaNote: noteRicetta, ricettaFoto: ricettaFotoB64 != null, pagato: paid, metodoPagamento: paid ? metodo : null, employeeId: empId, employeeNome: empNome, roomId: chosen, deviceId: devId, deviceHoldHours: devHours);
       tx.set(lock, {'touched': FieldValue.serverTimestamp(), 'blocks': nextBlocks}, SetOptions(merge: true));
       if (service.usesDevice) {
         final holdEnd = service.deviceHoldEnd(start);
@@ -1422,10 +1424,6 @@ class BookingService extends ChangeNotifier {
     final paid = pagato ?? a.pagato;
     final metodoRaw = metodoPagamento ?? a.metodoPagamento;
     final metodo = (!paid) ? null : ((metodoRaw == null || metodoRaw.trim().isEmpty) ? null : metodoRaw.trim().toLowerCase());
-    if (esenzione && (ricettaNumero == null || ricettaNumero.trim().isEmpty)) {
-      throw StateError('Con esenzione serve il numero ricetta');
-    }
-
     if (mail != null && (mail.length >= 120 || !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(mail))) throw StateError('Email non valida');
     final scheduleChanged = a.start != start || a.end != end || a.service.id != service.id;
     if (scheduleChanged && !service.availableOn(start.weekday)) throw StateError('Servizio non disponibile in questo giorno');
@@ -1556,7 +1554,8 @@ class BookingService extends ChangeNotifier {
         'updatedAt': FieldValue.serverTimestamp(),
       };
       if (esenzione) {
-        upd['ricettaNumero'] = ricettaNumero!.trim();
+        final nre = (ricettaNumero == null || ricettaNumero.trim().isEmpty) ? null : ricettaNumero.trim();
+        upd['ricettaNumero'] = nre;
         upd['ricettaNote'] = (ricettaNote == null || ricettaNote.trim().isEmpty) ? null : ricettaNote.trim();
       } else {
         upd['ricettaNumero'] = null;
@@ -1614,7 +1613,7 @@ class BookingService extends ChangeNotifier {
       employeeId: empId,
       employeeNome: empNome,
       esenzione: esenzione,
-      ricettaNumero: esenzione ? ricettaNumero?.trim() : null,
+      ricettaNumero: esenzione && (ricettaNumero ?? '').trim().isNotEmpty ? ricettaNumero!.trim() : null,
       ricettaNote: esenzione && (ricettaNote ?? '').trim().isNotEmpty ? ricettaNote!.trim() : null,
       ricettaFoto: a.ricettaFoto,
       pagato: paid,
@@ -1693,8 +1692,77 @@ class BookingService extends ChangeNotifier {
     return controller.stream;
   }
 
-  /// Foto ricetta (JPEG base64) salvata in `ricette/{appointmentId}`; solo staff.
+  /// Foto ricetta (JPEG base64) salvata in `ricette/{appointmentId}`; solo staff in lettura.
   Future<String?> ricettaFoto(String id) async => (await _db.doc('ricette/$id').get()).data()?['foto'] as String?;
+
+  /// Inserisce o aggiorna impegnativa/ricetta in un secondo momento (cliente o staff).
+  Future<Appointment> updateRicetta(
+    Appointment a, {
+    required bool esenzione,
+    String? ricettaNumero,
+    String? ricettaNote,
+    String? ricettaFotoB64,
+    bool keepExistingFoto = true,
+  }) async {
+    if (a.status == AppointmentStatus.annullato) {
+      throw StateError('Prenotazione annullata: non si può aggiornare la ricetta');
+    }
+    final nre = esenzione && ricettaNumero != null && ricettaNumero.trim().isNotEmpty ? ricettaNumero.trim() : null;
+    final note = esenzione && ricettaNote != null && ricettaNote.trim().isNotEmpty ? ricettaNote.trim() : null;
+    final hasNewFoto = esenzione && ricettaFotoB64 != null && ricettaFotoB64.isNotEmpty;
+    final hasFoto = esenzione && (hasNewFoto || (keepExistingFoto && a.ricettaFoto));
+    await _db.runTransaction((tx) async {
+      tx.update(_appts.doc(a.id), {
+        'esenzione': esenzione,
+        'ricettaNumero': nre,
+        'ricettaNote': note,
+        'ricettaFoto': hasFoto,
+        'updatedBy': _auth.currentUser?.uid,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (hasNewFoto) {
+        tx.set(_db.doc('ricette/${a.id}'), {
+          'foto': ricettaFotoB64,
+          'createdBy': _auth.currentUser?.uid,
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    });
+    notifyListeners();
+    return Appointment(
+      id: a.id,
+      service: a.service,
+      start: a.start,
+      end: a.end,
+      customerName: a.customerName,
+      phone: a.phone,
+      email: a.email,
+      status: a.status,
+      createdBy: a.createdBy,
+      calendarEventId: a.calendarEventId,
+      employeeId: a.employeeId,
+      employeeNome: a.employeeNome,
+      esenzione: esenzione,
+      ricettaNumero: nre,
+      ricettaNote: note,
+      ricettaFoto: hasFoto,
+      pagato: a.pagato,
+      metodoPagamento: a.metodoPagamento,
+      clienteUid: a.clienteUid,
+      clienteAccount: a.clienteAccount,
+      codiceFiscale: a.codiceFiscale,
+      roomId: a.roomId,
+      roomName: a.roomName,
+      deviceId: a.deviceId,
+      deviceHoldHours: a.deviceHoldHours,
+      annullatoDa: a.annullatoDa,
+      annullatoAt: a.annullatoAt,
+      rimborsoRichiesto: a.rimborsoRichiesto,
+      rimborsoStato: a.rimborsoStato,
+      rimborsoAt: a.rimborsoAt,
+      clienteChiamato: a.clienteChiamato,
+    );
+  }
 
   /// Servizio attivo per id (per eventi prenotabili).
   Future<ServiceType?> activeServiceById(String id) async {

@@ -137,10 +137,6 @@ class _EditBookingPageState extends State<EditBookingPage> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Scegli un orario')));
       return;
     }
-    if (!widget.customerOnly && _esenzione && _ricetta.text.trim().length < 4) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Numero ricetta obbligatorio con esenzione')));
-      return;
-    }
     setState(() => _busy = true);
     final m = ScaffoldMessenger.of(context);
     try {
@@ -156,7 +152,7 @@ class _EditBookingPageState extends State<EditBookingPage> {
         service: _service,
         start: _start!,
         esenzione: _esenzione,
-        ricettaNumero: _esenzione ? _ricetta.text.trim() : null,
+        ricettaNumero: _esenzione && _ricetta.text.trim().isNotEmpty ? _ricetta.text.trim() : null,
         ricettaNote: _esenzione && _note.text.trim().isNotEmpty ? _note.text.trim() : null,
         pagato: _metodo != null,
         metodoPagamento: _metodo,
@@ -268,8 +264,7 @@ class _EditBookingPageState extends State<EditBookingPage> {
           if (_esenzione) ...[
             const SizedBox(height: 8),
             TextFormField(controller: _ricetta, textCapitalization: TextCapitalization.characters,
-                decoration: const InputDecoration(labelText: 'Numero ricetta (NRE) *', border: OutlineInputBorder()),
-                validator: (v) => _esenzione && (v == null || v.trim().length < 4) ? 'Obbligatorio' : null),
+                decoration: const InputDecoration(labelText: 'Numero ricetta (NRE) (facoltativo)', border: OutlineInputBorder())),
             const SizedBox(height: 8),
             TextFormField(controller: _note, maxLines: 2,
                 decoration: const InputDecoration(labelText: 'Note / codice esenzione', border: OutlineInputBorder())),

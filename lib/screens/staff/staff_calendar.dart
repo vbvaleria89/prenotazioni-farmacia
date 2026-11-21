@@ -655,6 +655,16 @@ class _StaffCalendarState extends State<StaffCalendar> {
                 icon: const Icon(Icons.edit, size: 16, color: _navy),
                 label: const Text('Modifica'),
               ),
+            if (a.status != AppointmentStatus.annullato)
+              TextButton.icon(
+                onPressed: () async {
+                  final nav = Navigator.of(context);
+                  final ok = await apriRicetta(context, a);
+                  if (ok && asSheet && nav.mounted) nav.maybePop();
+                },
+                icon: const Icon(Icons.medication_outlined, size: 16, color: _navy),
+                label: const Text('Ricetta'),
+              ),
             if (a.blocksRoom)
               TextButton.icon(
                 onPressed: () async {
