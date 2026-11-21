@@ -154,7 +154,7 @@ class _EditAccountPageState extends State<EditAccountPage> {
                   validator: (v) => (v ?? '').trim().length < 6 ? 'Telefono non valido' : null),
                 const SizedBox(height: 12),
                 TextFormField(controller: _cf, enabled: !busy, textCapitalization: TextCapitalization.characters, autocorrect: false,
-                  decoration: const InputDecoration(labelText: 'Codice fiscale', border: OutlineInputBorder()), validator: codiceFiscaleError),
+                  decoration: const InputDecoration(labelText: 'Codice fiscale (facoltativo)', border: OutlineInputBorder()), validator: codiceFiscaleError),
               ],
               const SizedBox(height: 16),
               FilledButton.icon(onPressed: busy ? null : _save, icon: const Icon(Icons.save_outlined), label: Text(_saving ? 'Salvataggio…' : 'Salva dati')),

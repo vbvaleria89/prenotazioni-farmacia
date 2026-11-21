@@ -145,10 +145,11 @@ class CustomerAuth {
     if (current == null || current.isAnonymous) throw StateError('Accedi al tuo account');
     final name = nome.trim();
     final phone = telefono.trim();
-    final cf = normalizeCodiceFiscale(codiceFiscale);
+    final cfRaw = normalizeCodiceFiscale(codiceFiscale);
+    final String? cf = cfRaw.isEmpty ? null : cfRaw;
     if (name.isEmpty || name.length >= 100) throw StateError('Nome non valido');
     if (phone.length < 6 || phone.length >= 30) throw StateError('Telefono non valido');
-    if (!isValidCodiceFiscale(cf)) throw StateError('Codice fiscale non valido');
+    if (cf != null && !isValidCodiceFiscale(cf)) throw StateError('Codice fiscale non valido');
     final ref = _db.doc('customers/${current.uid}');
     await _db.runTransaction((tx) async {
       final doc = await tx.get(ref);
@@ -156,7 +157,7 @@ class CustomerAuth {
         if (!doc.exists) 'email': current.email ?? '',
         'nome': name,
         'telefono': phone,
-        'codiceFiscale': cf,
+        'codiceFiscale': cf ?? '',
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });

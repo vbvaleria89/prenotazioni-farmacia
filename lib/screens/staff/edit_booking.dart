@@ -195,7 +195,7 @@ class _EditBookingPageState extends State<EditBookingPage> {
               validator: (v) => (v == null || v.trim().length < 6) ? 'Telefono non valido' : null),
           const SizedBox(height: 10),
           if (!widget.customerOnly) TextFormField(controller: _cf, textCapitalization: TextCapitalization.characters, autocorrect: false,
-              decoration: const InputDecoration(labelText: 'Codice fiscale *', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: 'Codice fiscale (facoltativo)', border: OutlineInputBorder()),
               validator: codiceFiscaleError),
           const SizedBox(height: 10),
           TextFormField(controller: _email, maxLength: 119, keyboardType: TextInputType.emailAddress, autocorrect: false,

@@ -37,10 +37,10 @@ bool isValidCodiceFiscale(String raw) {
   return codiceFiscaleChecksum(cf.substring(0, 15)) == cf[15];
 }
 
-/// Null se valido. Testo pronto per il form.
+/// Null se vuoto (facoltativo) o valido. Testo pronto per il form.
 String? codiceFiscaleError(String? raw) {
   final cf = normalizeCodiceFiscale(raw ?? '');
-  if (cf.isEmpty) return 'Obbligatorio';
+  if (cf.isEmpty) return null;
   if (!isValidCodiceFiscale(cf)) return 'Codice fiscale non valido';
   return null;
 }

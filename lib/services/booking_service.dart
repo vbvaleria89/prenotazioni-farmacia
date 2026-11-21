@@ -980,8 +980,9 @@ class BookingService extends ChangeNotifier {
 
   Future<Appointment> book(ServiceType service, DateTime start, String name, String phone, {required String codiceFiscale, String? email, bool esenzione = false, String? ricettaNumero, String? ricettaNote, String? ricettaFotoB64, bool pagato = false, String? metodoPagamento, bool manualTime = false, String? employeeId, String? employeeNome}) async {
     await ensureClientAuth();
-    final cf = normalizeCodiceFiscale(codiceFiscale);
-    if (!isValidCodiceFiscale(cf)) throw StateError('Codice fiscale non valido');
+    final cfRaw = normalizeCodiceFiscale(codiceFiscale);
+    final String? cf = cfRaw.isEmpty ? null : cfRaw;
+    if (cf != null && !isValidCodiceFiscale(cf)) throw StateError('Codice fiscale non valido');
     final end = start.add(service.duration);
     final staffBooking = await _isActiveStaff();
     if (!staffBooking && start.isBefore(DateTime.now().add(service.duration))) {
@@ -1078,7 +1079,7 @@ class BookingService extends ChangeNotifier {
           'email': mail ?? (_auth.currentUser?.email ?? ''),
           'nome': name,
           'telefono': phone,
-          'codiceFiscale': cf,
+          if (cf != null) 'codiceFiscale': cf,
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       } catch (_) {}
@@ -1413,8 +1414,9 @@ class BookingService extends ChangeNotifier {
     String? employeeId,
     String? employeeNome,
   }) async {
-    final cf = normalizeCodiceFiscale(codiceFiscale);
-    if (!isValidCodiceFiscale(cf)) throw StateError('Codice fiscale non valido');
+    final cfRaw = normalizeCodiceFiscale(codiceFiscale);
+    final String? cf = cfRaw.isEmpty ? null : cfRaw;
+    if (cf != null && !isValidCodiceFiscale(cf)) throw StateError('Codice fiscale non valido');
     final tel = phone.trim();
     if (tel.length < 6 || tel.length >= 30) throw StateError('Telefono non valido');
     final nome = name.trim();
