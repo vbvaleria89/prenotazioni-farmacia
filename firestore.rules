@@ -71,8 +71,10 @@ service cloud.firestore {
         && request.resource.data.email is string && request.resource.data.email.size() < 120
         && request.resource.data.nome is string && request.resource.data.nome.size() < 100
         && request.resource.data.telefono is string && request.resource.data.telefono.size() < 30
-        && request.resource.data.codiceFiscale is string
-        && request.resource.data.codiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$');
+        && (!('codiceFiscale' in request.resource.data)
+            || request.resource.data.codiceFiscale == ''
+            || (request.resource.data.codiceFiscale is string
+                && request.resource.data.codiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$')));
       // Il banco corregge soltanto i contatti di un profilo esistente, non password o identità.
       allow update: if isActiveEmployee()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'nome', 'telefono', 'updatedAt'])
@@ -171,8 +173,11 @@ service cloud.firestore {
         && (request.resource.data.get('pagato', false) == false || isEmployee())
         && request.resource.data.clienteNome is string && request.resource.data.clienteNome.size() < 100
         && request.resource.data.clienteTel is string && request.resource.data.clienteTel.size() < 30
-        && request.resource.data.clienteCodiceFiscale is string
-        && request.resource.data.clienteCodiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$')
+        && (!('clienteCodiceFiscale' in request.resource.data)
+            || request.resource.data.clienteCodiceFiscale == null
+            || request.resource.data.clienteCodiceFiscale == ''
+            || (request.resource.data.clienteCodiceFiscale is string
+                && request.resource.data.clienteCodiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$')))
         && (!('ricettaNumero' in request.resource.data)
             || request.resource.data.ricettaNumero == null
             || (request.resource.data.ricettaNumero is string && request.resource.data.ricettaNumero.size() > 0 && request.resource.data.ricettaNumero.size() < 60))

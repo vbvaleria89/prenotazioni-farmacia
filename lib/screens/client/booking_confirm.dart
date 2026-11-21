@@ -132,7 +132,8 @@ class _BookingConfirmState extends State<BookingConfirm> {
 
   String _manualMail(String code) {
     final to = _email.text.trim();
-    return 'A: $to\nOggetto: Conferma prenotazione $code – Farmacia San Ciro\n\nGentile ${_name.text.trim()},\nla sua prenotazione è confermata.\nServizio: ${widget.service.name}\nData e ora: $_quando\nCodice: $code\nCodice fiscale: ${normalizeCodiceFiscale(_cf.text)}\nMostri il codice in farmacia.';
+    final cf = normalizeCodiceFiscale(_cf.text);
+    return 'A: $to\nOggetto: Conferma prenotazione $code – Farmacia San Ciro\n\nGentile ${_name.text.trim()},\nla sua prenotazione è confermata.\nServizio: ${widget.service.name}\nData e ora: $_quando\nCodice: $code${cf.isEmpty ? '' : '\nCodice fiscale: $cf'}\nMostri il codice in farmacia.';
   }
 
   /// Non lancia: la prenotazione è già su Firestore.
@@ -356,8 +357,8 @@ class _BookingConfirmState extends State<BookingConfirm> {
           TextFormField(controller: _phone, keyboardType: TextInputType.phone, decoration: InputDecoration(labelText: widget.fromStaff ? 'Telefono del cliente *' : 'Telefono *'), validator: (v) => (v == null || v.trim().length < 6) ? 'Telefono non valido' : null),
           TextFormField(controller: _cf, textCapitalization: TextCapitalization.characters, autocorrect: false,
               decoration: InputDecoration(
-                labelText: widget.fromStaff ? 'Codice fiscale del cliente *' : 'Codice fiscale *',
-                helperText: 'Obbligatorio per scontrino e detrazioni. Non è la password.',
+                labelText: widget.fromStaff ? 'Codice fiscale del cliente (facoltativo)' : 'Codice fiscale (facoltativo)',
+                helperText: 'Utile per scontrino e detrazioni. Non è la password.',
                 helperMaxLines: 2,
               ),
               validator: codiceFiscaleError),

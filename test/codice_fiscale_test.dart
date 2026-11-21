@@ -13,7 +13,7 @@ void main() {
     expect(isValidCodiceFiscale('rss mra85t10a562s'), isTrue);
     expect(normalizeCodiceFiscale(' rss mra85t10a562s '), 'RSSMRA85T10A562S');
     expect(isValidCodiceFiscale('RSSMRA85T10A562A'), isFalse);
-    expect(codiceFiscaleError(''), 'Obbligatorio');
+    expect(codiceFiscaleError(''), isNull);
     expect(codiceFiscaleError('RSSMRA85T10A562A'), 'Codice fiscale non valido');
     expect(codiceFiscaleError('RSSMRA85T10A562S'), isNull);
   });
