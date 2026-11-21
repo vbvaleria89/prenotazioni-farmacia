@@ -603,6 +603,49 @@ export async function handleGcalSync(req, deps = {}) {
   }
 }
 
+/**
+ * Allinea eventi Google ai colori dei servizi (e al resto del payload sync).
+ * [serviceId] opzionale: solo prenotazioni di quel servizio.
+ */
+export async function pushServiceColorsToGoogle({
+  db, accessToken, calendarId, fetchImpl,
+  serviceId = null,
+  now = new Date(),
+  lookbackDays = 120,
+  limit = 500,
+}) {
+  const from = new Date(now.getTime() - lookbackDays * 86400000);
+  const snap = await db.collection('appointments').where('start', '>=', from).limit(limit).get();
+  const want = serviceId ? plain(serviceId, 80) : '';
+  const summary = {
+    scanned: 0, created: 0, updated: 0, deleted: 0, skipped: 0, failed: 0,
+    serviceId: want || null,
+  };
+  for (const doc of snap.docs) {
+    const data = doc.data() || {};
+    if (want && plain(data.servizio, 80) !== want) continue;
+    summary.scanned++;
+    try {
+      const r = await syncAppointmentRecord({
+        db, data, id: doc.id, accessToken, calendarId, fetchImpl,
+      });
+      if (r.action === 'created') summary.created++;
+      else if (r.action === 'updated') summary.updated++;
+      else if (r.action === 'deleted') summary.deleted++;
+      else if (r.action === 'skipped') summary.skipped++;
+    } catch (e) {
+      summary.failed++;
+      console.error(JSON.stringify({
+        event: 'gcal_push_colors_item_failed',
+        appointmentId: doc.id,
+        status: e.status || 0,
+        message: e.googleMessage || e.message || null,
+      }));
+    }
+  }
+  return summary;
+}
+
 export async function reconcileAppointments({ db, accessToken, calendarId, fetchImpl, now = new Date(), lookbackDays = 14, limit = 80 }) {
   const from = new Date(now.getTime() - lookbackDays * 86400000);
   const snap = await db.collection('appointments').where('start', '>=', from).limit(limit).get();
@@ -779,6 +822,58 @@ export async function handleGcalImportColors(req, deps = {}) {
       reason: e.reason || null,
     }));
     return json({ error: 'import_failed' }, 502);
+  }
+}
+
+/** Admin: spinge i colori dei servizi (app → Google) sulle prenotazioni attive. */
+export async function handleGcalPushColors(req, deps = {}) {
+  if (req.method === 'OPTIONS') return new Response('', { headers: CORS });
+  if (req.method !== 'POST') return json({ error: 'method' }, 405);
+  const token = bearer(req);
+  if (!token) return json({ error: 'unauthorized' }, 401);
+  const env = deps.env ?? readEnv;
+  const sdk = deps.services ?? firebaseServices(env);
+  if (!sdk) return json({ error: 'not_configured' }, 503);
+  let user;
+  try { user = await sdk.auth.verifyIdToken(token); } catch { return json({ error: 'unauthorized' }, 401); }
+  const me = await sdk.db.doc(`employees/${user.uid}`).get();
+  if (!me.exists || me.data()?.ruolo !== 'admin' || me.data()?.attivo === false) {
+    return json({ error: 'forbidden' }, 403);
+  }
+  const config = calendarConfig(env);
+  if (!config.clientSecret) return json({ error: 'not_configured' }, 503);
+  let body = {};
+  try { body = await req.json(); } catch { /* body opzionale */ }
+  const serviceId = typeof body?.serviceId === 'string' ? plain(body.serviceId, 80) : '';
+  const fetchImpl = deps.fetch ?? fetch;
+  const secret = await readSecret(sdk.db);
+  let tokens;
+  try { tokens = await accessTokenFromSecret(secret, config, fetchImpl); }
+  catch (e) {
+    console.error(JSON.stringify({ event: 'gcal_push_colors_token_failed', status: e.status || 0, code: e.message }));
+    await markTokenProblem(sdk.db, e);
+    return json({ error: isRevokedTokenError(e) ? 'token_expired' : 'not_connected' }, 503);
+  }
+  if (tokens.error) return json({ error: 'not_connected' }, 503);
+  await persistRotated(sdk.db, tokens.rotatedRefresh);
+  await clearTokenProblem(sdk.db, secret);
+  try {
+    const result = await pushServiceColorsToGoogle({
+      db: sdk.db,
+      accessToken: tokens.accessToken,
+      calendarId: config.calendarId,
+      fetchImpl,
+      serviceId: serviceId || null,
+    });
+    return json({ ok: true, ...result });
+  } catch (e) {
+    console.error(JSON.stringify({
+      event: 'gcal_push_colors_failed',
+      status: e.status || 0,
+      code: e.message,
+      reason: e.reason || null,
+    }));
+    return json({ error: 'push_failed' }, 502);
   }
 }
 
