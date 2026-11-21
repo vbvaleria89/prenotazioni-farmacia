@@ -63,7 +63,7 @@ class _BackofficeState extends State<_BackofficeBody> {
   @override
   void initState() {
     super.initState();
-    bookingService.seedServicesIfEmpty().catchError((_) {});
+    bookingService.seedServicesIfEmpty().catchError((_) {}).then((_) => bookingService.seedServiceColorsIfMissing()).catchError((_) {});
     Room.seedIfEmpty().catchError((_) {});
     Device.seedIfEmpty().catchError((_) {});
     bookingService.seedHolterDevice().catchError((_) {});
@@ -109,7 +109,7 @@ class _BackofficeState extends State<_BackofficeBody> {
               Row(children: [
                 Expanded(child: Text('Servizi', style: t)),
               ]),
-              const Text('Tocca un servizio per modificare nome, durata, prezzo, sconto, giorni, stanze utilizzabili e persona.'),
+              const Text('Tocca un servizio per modificare nome, durata, prezzo, sconto, colore calendario, giorni, stanze utilizzabili e persona.'),
               StreamBuilder<List<ServiceType>>(
                 stream: bookingService.watchServices(),
                 builder: (context, snap) {
@@ -118,7 +118,10 @@ class _BackofficeState extends State<_BackofficeBody> {
                   return Column(children: [
                     for (final s in list)
                       Card(child: ListTile(
-                        leading: Icon(s.attivo ? Icons.check_circle : Icons.pause_circle, color: s.attivo ? Brand.green : Colors.grey),
+                        leading: CircleAvatar(
+                          backgroundColor: s.calendarColor,
+                          child: Icon(s.attivo ? Icons.check : Icons.pause, color: contrastOn(s.calendarColor), size: 18),
+                        ),
                         title: Text(s.name + (s.attivo ? '' : ' (disattivato)')),
                         subtitle: Text([
                           '${s.duration.inMinutes} min',
@@ -231,6 +234,9 @@ class _ServiceDialogState extends State<_ServiceDialog> {
     return h > 0 ? '$h' : '';
   }());
   late String _dipId = widget.service?.dipendenteId ?? '';
+  late String _gcalColorId = (widget.service?.effectiveGcalColorId.isNotEmpty == true)
+      ? widget.service!.effectiveGcalColorId
+      : defaultServiceColorFor(id: widget.service?.id, ordine: widget.nextOrder).gcalColorId;
 
   static String _fmt(double? v) => v == null ? '' : v.toStringAsFixed(2).replaceAll('.', ',');
   static double? _parse(String s) => s.trim().isEmpty ? null : double.tryParse(s.trim().replaceAll('€', '').replaceAll(',', '.'));
@@ -285,12 +291,14 @@ class _ServiceDialogState extends State<_ServiceDialog> {
       }
       deviceId = dev.id;
     }
+    final color = serviceColorByGcalId(_gcalColorId);
     final s = ServiceType(
       id: old?.id ?? _slug(_nome.text),
       name: _nome.text.trim(), description: _desc.text.trim(), duration: Duration(minutes: int.parse(_durata.text.trim())),
       attivo: _attivo, prezzo: _parse(_prezzo.text), prezzoScontato: _parse(_sconto.text),
       giorni: _dedicati ? _giorniSel : const {}, dipendenteId: _dipId, dipendenteNome: _persona.text.trim(), ordine: old?.ordine ?? widget.nextOrder,
       stanze: {..._stanzeSel}, deviceId: deviceId, deviceHoldHours: deviceHoldHours,
+      colore: color.hex, gcalColorId: color.gcalColorId,
     );
     try {
       await bookingService.saveService(s);
@@ -339,6 +347,40 @@ class _ServiceDialogState extends State<_ServiceDialog> {
                 style: TextStyle(fontSize: 12, color: Colors.black54))),
             SwitchListTile(contentPadding: EdgeInsets.zero, activeThumbColor: Brand.green, title: const Text('Attivo (prenotabile dai clienti)'),
                 value: _attivo, onChanged: (v) => setState(() => _attivo = v)),
+            const Padding(padding: EdgeInsets.only(top: 8, bottom: 4), child: Text('Colore calendario', style: TextStyle(fontWeight: FontWeight.w600))),
+            const Text('Stesso colore nel calendario dell\'app e su Google Calendar (palette ufficiale Google).',
+                style: TextStyle(fontSize: 12, color: Colors.black54)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final c in serviceColorPalette)
+                Tooltip(
+                  message: c.name,
+                  child: InkWell(
+                    onTap: () => setState(() => _gcalColorId = c.gcalColorId),
+                    borderRadius: BorderRadius.circular(20),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: c.color,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: _gcalColorId == c.gcalColorId ? Brand.primary : Colors.black26,
+                          width: _gcalColorId == c.gcalColorId ? 3 : 1,
+                        ),
+                      ),
+                      child: _gcalColorId == c.gcalColorId
+                          ? Icon(Icons.check, size: 18, color: contrastOn(c.color))
+                          : null,
+                    ),
+                  ),
+                ),
+            ]),
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(serviceColorByGcalId(_gcalColorId).name,
+                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
+            ),
             const Padding(padding: EdgeInsets.only(top: 8, bottom: 4), child: Text('Stanze utilizzabili', style: TextStyle(fontWeight: FontWeight.w600))),
             const Text('Seleziona una o più stanze in alternativa. Ogni prenotazione ne occupa una sola: la prima libera per priorità.',
                 style: TextStyle(fontSize: 12, color: Colors.black54)),

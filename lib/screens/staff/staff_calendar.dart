@@ -5,6 +5,7 @@ import 'edit_booking.dart';
 import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../models/appointment.dart';
+import '../../models/service_type.dart';
 import '../../theme/brand.dart';
 import '../client/slot_picker.dart' show hhmm;
 
@@ -72,18 +73,15 @@ class _StaffCalendarState extends State<StaffCalendar> {
         constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
       );
 
+  /// Colore evento = colore del servizio (palette Google). Annullati in grigio.
+  /// Preferisce la registry live così un cambio colore in backoffice si vede subito.
   Color _colorFor(Appointment a) {
-    switch (a.effectiveStatus()) {
-      case AppointmentStatus.annullato:
-        return Colors.grey;
-      case AppointmentStatus.inAttesa:
-        return const Color(0xFFE8A317);
-      case AppointmentStatus.confermato:
-        return _navy;
-      case AppointmentStatus.completato:
-        return _green;
-    }
+    if (a.effectiveStatus() == AppointmentStatus.annullato) return Colors.grey.shade500;
+    final live = ServiceType.registry[a.service.id];
+    return (live ?? a.service).calendarColor;
   }
+
+  Color _fgFor(Appointment a) => contrastOn(_colorFor(a));
 
   void _goToday() {
     final n = DateTime.now();
@@ -135,94 +133,125 @@ class _StaffCalendarState extends State<StaffCalendar> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: const BrandAppBar(subtitle: 'Calendario prenotazioni'),
-      body: StreamBuilder<List<Appointment>>(
-        stream: bookingService.watchRange(_rangeFrom, _rangeTo),
-        builder: (context, snap) {
-          if (snap.hasError) return Center(child: Text('Errore: ${snap.error}'));
-          final uid = FirebaseAuth.instance.currentUser?.uid;
-          // Staff ordinario: forzato su «I miei». Admin: rispetta il selettore.
-          final forceMine = _isAdmin != true;
-          final mineOnly = forceMine || _onlyMe;
-          final all = (snap.data ?? const <Appointment>[]).where((a) => !mineOnly || (uid != null && a.employeeId == uid)).toList();
-          return Column(children: [
-            if (_isAdmin == true) Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                const Text('Vista calendario', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                const SizedBox(height: 6),
-                SegmentedButton<bool>(
-                  showSelectedIcon: false,
-                  segments: const [
-                    ButtonSegment(value: true, label: Text('I miei'), icon: Icon(Icons.person_outline)),
-                    ButtonSegment(value: false, label: Text('Tutti'), icon: Icon(Icons.groups_outlined)),
-                  ],
-                  selected: {_onlyMe},
-                  onSelectionChanged: (v) => setState(() => _onlyMe = v.first),
+      body: StreamBuilder<List<ServiceType>>(
+        stream: bookingService.watchActiveServices(),
+        builder: (context, svcSnap) {
+          final services = [...(svcSnap.data ?? ServiceType.registry.values.where((s) => s.attivo))]
+            ..sort((a, b) => a.ordine != b.ordine ? a.ordine.compareTo(b.ordine) : a.name.compareTo(b.name));
+          return StreamBuilder<List<Appointment>>(
+            stream: bookingService.watchRange(_rangeFrom, _rangeTo),
+            builder: (context, snap) {
+              if (snap.hasError) return Center(child: Text('Errore: ${snap.error}'));
+              final uid = FirebaseAuth.instance.currentUser?.uid;
+              // Staff ordinario: forzato su «I miei». Admin: rispetta il selettore.
+              final forceMine = _isAdmin != true;
+              final mineOnly = forceMine || _onlyMe;
+              final all = (snap.data ?? const <Appointment>[]).where((a) => !mineOnly || (uid != null && a.employeeId == uid)).toList();
+              return Column(children: [
+                if (_isAdmin == true) Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    const Text('Vista calendario', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                    const SizedBox(height: 6),
+                    SegmentedButton<bool>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment(value: true, label: Text('I miei'), icon: Icon(Icons.person_outline)),
+                        ButtonSegment(value: false, label: Text('Tutti'), icon: Icon(Icons.groups_outlined)),
+                      ],
+                      selected: {_onlyMe},
+                      onSelectionChanged: (v) => setState(() => _onlyMe = v.first),
+                    ),
+                  ]),
+                ) else if (_isAdmin == false) const Padding(
+                  padding: EdgeInsets.fromLTRB(12, 8, 12, 2),
+                  child: Text('Mostra solo i servizi assegnati a te.', style: TextStyle(fontSize: 12, color: Colors.black54)),
                 ),
-              ]),
-            ) else if (_isAdmin == false) const Padding(
-              padding: EdgeInsets.fromLTRB(12, 8, 12, 2),
-              child: Text('Mostra solo i servizi assegnati a te.', style: TextStyle(fontSize: 12, color: Colors.black54)),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-              child: Row(children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                  child: Row(children: [
+                    Expanded(
+                      child: Text(_title,
+                          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _navy),
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                    _nav(Icons.chevron_left, _prev),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(0, 30),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        foregroundColor: _navy,
+                      ),
+                      onPressed: _goToday,
+                      child: const Text('Oggi'),
+                    ),
+                    _nav(Icons.chevron_right, _next),
+                  ]),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+                  child: SegmentedButton<int>(
+                    segments: const [
+                      ButtonSegment(value: 0, label: Text('Mese'), icon: Icon(Icons.calendar_view_month, size: 18)),
+                      ButtonSegment(value: 1, label: Text('Settimana'), icon: Icon(Icons.view_week, size: 18)),
+                    ],
+                    selected: {_mode},
+                    onSelectionChanged: (s) {
+                      final m = s.first;
+                      setState(() {
+                        _mode = m;
+                        if (m == 1) {
+                          _weekStart = _mondayOf(_sel);
+                        } else {
+                          _month = DateTime(_sel.year, _sel.month);
+                        }
+                      });
+                    },
+                    style: ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      foregroundColor: WidgetStateProperty.resolveWith(
+                        (st) => st.contains(WidgetState.selected) ? Colors.white : _navy,
+                      ),
+                      backgroundColor: WidgetStateProperty.resolveWith(
+                        (st) => st.contains(WidgetState.selected) ? _navy : Colors.transparent,
+                      ),
+                    ),
+                  ),
+                ),
+                _serviceLegend(services),
                 Expanded(
-                  child: Text(_title,
-                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _navy),
-                      overflow: TextOverflow.ellipsis),
+                  child: !snap.hasData
+                      ? const Center(child: CircularProgressIndicator())
+                      : (_mode == 0 ? _monthView(all) : _weekView(all)),
                 ),
-                _nav(Icons.chevron_left, _prev),
-                TextButton(
-                  style: TextButton.styleFrom(
-                    minimumSize: const Size(0, 30),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    foregroundColor: _navy,
-                  ),
-                  onPressed: _goToday,
-                  child: const Text('Oggi'),
-                ),
-                _nav(Icons.chevron_right, _next),
-              ]),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-              child: SegmentedButton<int>(
-                segments: const [
-                  ButtonSegment(value: 0, label: Text('Mese'), icon: Icon(Icons.calendar_view_month, size: 18)),
-                  ButtonSegment(value: 1, label: Text('Settimana'), icon: Icon(Icons.view_week, size: 18)),
-                ],
-                selected: {_mode},
-                onSelectionChanged: (s) {
-                  final m = s.first;
-                  setState(() {
-                    _mode = m;
-                    if (m == 1) {
-                      _weekStart = _mondayOf(_sel);
-                    } else {
-                      _month = DateTime(_sel.year, _sel.month);
-                    }
-                  });
-                },
-                style: ButtonStyle(
-                  visualDensity: VisualDensity.compact,
-                  foregroundColor: WidgetStateProperty.resolveWith(
-                    (st) => st.contains(WidgetState.selected) ? Colors.white : _navy,
-                  ),
-                  backgroundColor: WidgetStateProperty.resolveWith(
-                    (st) => st.contains(WidgetState.selected) ? _navy : Colors.transparent,
-                  ),
-                ),
-              ),
-            ),
-            Expanded(
-              child: !snap.hasData
-                  ? const Center(child: CircularProgressIndicator())
-                  : (_mode == 0 ? _monthView(all) : _weekView(all)),
-            ),
-          ]);
+              ]);
+            },
+          );
         },
       ),
+    );
+  }
+
+  Widget _serviceLegend(List<ServiceType> list) {
+    if (list.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Legenda servizi', style: TextStyle(fontSize: 11, color: Colors.black54, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        Wrap(spacing: 10, runSpacing: 4, children: [
+          for (final s in list)
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(color: s.calendarColor, shape: BoxShape.circle, border: Border.all(color: Colors.black26)),
+              ),
+              const SizedBox(width: 5),
+              Text(s.name, style: const TextStyle(fontSize: 11)),
+            ]),
+        ]),
+      ]),
     );
   }
 
@@ -359,14 +388,17 @@ class _StaffCalendarState extends State<StaffCalendar> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
                   decoration: BoxDecoration(
-                    color: _colorFor(a).withValues(alpha: 0.85),
+                    color: _colorFor(a).withValues(alpha: 0.92),
                     borderRadius: BorderRadius.circular(2),
+                    border: a.effectiveStatus() == AppointmentStatus.inAttesa
+                        ? Border.all(color: const Color(0xFFE8A317), width: 1)
+                        : null,
                   ),
                   child: Text(
                     '${hhmm(a.start)} ${a.service.name}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w600, height: 1.1),
+                    style: TextStyle(fontSize: 9, color: _fgFor(a), fontWeight: FontWeight.w600, height: 1.1),
                   ),
                 ),
               ),
@@ -519,6 +551,8 @@ class _StaffCalendarState extends State<StaffCalendar> {
     final clampedTop = top.clamp(0.0, gridH - 8);
     final clampedH = height.clamp(18.0, gridH - clampedTop);
     final c = _colorFor(a);
+    final fg = _fgFor(a);
+    final pending = a.effectiveStatus() == AppointmentStatus.inAttesa;
 
     return Positioned(
       top: clampedTop,
@@ -532,28 +566,34 @@ class _StaffCalendarState extends State<StaffCalendar> {
         child: InkWell(
           borderRadius: BorderRadius.circular(4),
           onTap: () => _openDetail(a),
-          child: Padding(
+          child: Container(
+            decoration: pending
+                ? BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: const Color(0xFFE8A317), width: 1.5),
+                  )
+                : null,
             padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(
                 '${hhmm(a.start)}–${hhmm(a.end)}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700, height: 1.1),
+                style: TextStyle(fontSize: 10, color: fg, fontWeight: FontWeight.w700, height: 1.1),
               ),
               if (clampedH >= 28)
                 Text(
                   a.service.name,
                   maxLines: clampedH >= 44 ? 2 : 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 10, color: Colors.white, height: 1.15),
+                  style: TextStyle(fontSize: 10, color: fg, height: 1.15),
                 ),
               if (clampedH >= 52 && a.customerName.isNotEmpty)
                 Text(
                   a.customerName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 9, color: Colors.white.withValues(alpha: 0.9)),
+                  style: TextStyle(fontSize: 9, color: fg.withValues(alpha: 0.9)),
                 ),
             ]),
           ),

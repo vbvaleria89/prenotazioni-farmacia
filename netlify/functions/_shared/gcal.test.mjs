@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   eventFromAppointment, shortCode, stanzaLabel, shouldHaveEvent, authorizationUrl,
   handleGcalSync, handleGcalReconcile, handleGcalStatus, handleGcalOauthStart,
+  parseGcalColorId, loadServiceColorId,
   DEFAULT_CALENDAR_ID, DEFAULT_EXPECTED_EMAIL, GCAL_SCOPE, EVENT_COLOR_ID,
 } from './gcal.mjs';
 
@@ -41,6 +42,20 @@ test('mapping evento: titolo Nome · Servizio e descrizione con telefono cliccab
   assert.equal(ev.colorId, '1');
   assert.equal(EVENT_COLOR_ID, '1');
   assert.doesNotMatch(JSON.stringify(ev), /RSSMRA80A01H501U/);
+});
+
+test('parseGcalColorId e colore da servizio/opts', () => {
+  assert.equal(parseGcalColorId('4'), '4');
+  assert.equal(parseGcalColorId('11'), '11');
+  assert.equal(parseGcalColorId('0'), null);
+  assert.equal(parseGcalColorId('12'), null);
+  assert.equal(parseGcalColorId(''), null);
+  const withOpt = eventFromAppointment(id, { servizio: 'holter', status: 'confermato',
+    start: new Date('2026-11-13T08:00:00.000Z'), end: new Date('2026-11-13T08:10:00.000Z') }, { colorId: '4' });
+  assert.equal(withOpt.colorId, '4');
+  const withField = eventFromAppointment(id, { servizio: 'holter', gcalColorId: '10', status: 'confermato',
+    start: new Date('2026-11-13T08:00:00.000Z'), end: new Date('2026-11-13T08:10:00.000Z') });
+  assert.equal(withField.colorId, '10');
 });
 
 test('mapping: nome assente usa email o Cliente; senza operatore e senza telefono', () => {
@@ -144,7 +159,7 @@ function memDb(records) {
   return { store, db };
 }
 
-function fixture({ caller = 'staff1', role = 'staff', connected = true, appt, secret = {} } = {}) {
+function fixture({ caller = 'staff1', role = 'staff', connected = true, appt, secret = {}, services = [] } = {}) {
   const data = appt ?? {
     createdBy: 'staff1', clienteUid: 'cust1', status: 'inAttesa',
     servizioNome: 'ECG', roomId: 1, roomName: 'Stanza servizi',
@@ -156,6 +171,7 @@ function fixture({ caller = 'staff1', role = 'staff', connected = true, appt, se
     ['employees/admin1', { ruolo: 'admin', attivo: true }],
     ['employees/disabled', { ruolo: 'admin', attivo: false }],
     ['serverSecrets/gcal', connected ? { refreshToken: 'rt-1', email: DEFAULT_EXPECTED_EMAIL, ...secret } : { ...secret }],
+    ...services,
   ]);
   const calls = [];
   const deps = {
@@ -230,6 +246,22 @@ test('gcal-sync: aggiorna evento esistente e imposta colorId Lavanda', async () 
   const payload = JSON.parse(patch.body);
   assert.equal(payload.colorId, '1');
   assert.equal(payload.summary, 'Cliente · ECG');
+});
+
+test('gcal-sync: usa gcalColorId del servizio Firestore', async () => {
+  const f = fixture({
+    appt: {
+      createdBy: 'staff1', status: 'confermato', calendarEventId: 'evt-old',
+      servizio: 'holter', servizioNome: 'Holter Cardiaco', roomId: 1,
+      start: new Date('2026-11-13T08:00:00Z'), end: new Date('2026-11-13T08:10:00Z'),
+    },
+    services: [['services/holter', { nome: 'Holter Cardiaco', gcalColorId: '4', colore: '#FF887C' }]],
+  });
+  assert.equal(await loadServiceColorId(f.deps.services.db, f.store.get(`appointments/${id}`)), '4');
+  const r = await handleGcalSync(request('/api/gcal-sync', { token: 'ok', body: { appointmentId: id } }), f.deps);
+  assert.equal(r.status, 200);
+  const patch = f.calls.find((c) => c.method === 'PATCH' && String(c.url).includes('/events'));
+  assert.equal(JSON.parse(patch.body).colorId, '4');
 });
 
 test('gcal-reconcile: eventi già presenti vengono aggiornati con colorId', async () => {

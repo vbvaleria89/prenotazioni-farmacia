@@ -19,8 +19,10 @@ export const GCAL_SCOPE = [
   'email',
 ].join(' ');
 export const SECRETS_PATH = 'serverSecrets/gcal';
-// Google Calendar event color: 1 = Lavanda / Lavender.
+// Google Calendar event colors: solo ID 1–11 (niente hex custom).
+// 1 Lavanda · default se il servizio non ha colore configurato.
 export const EVENT_COLOR_ID = '1';
+export const GCAL_COLOR_IDS = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']);
 export const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 export const CALENDAR_API = 'https://www.googleapis.com/calendar/v3';
 export const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
@@ -109,8 +111,27 @@ export function paymentLabel(data) {
   return 'Pagato';
 }
 
+/** colorId Google Calendar (1–11); null se assente/non valido. */
+export function parseGcalColorId(raw) {
+  const id = String(raw ?? '').trim();
+  return GCAL_COLOR_IDS.has(id) ? id : null;
+}
+
+const GCAL_COLOR_LIST = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'];
+
+/** Default stabile allineato a `defaultServiceColorFor` in Flutter. */
+export function defaultGcalColorIdFor(serviceId, ordine = 0) {
+  const n = GCAL_COLOR_LIST.length;
+  const ord = Number(ordine) || 0;
+  if (ord > 0) return GCAL_COLOR_LIST[(ord - 1) % n];
+  let h = 0;
+  const s = String(serviceId || '');
+  for (let i = 0; i < s.length; i++) h = (h + s.charCodeAt(i)) % n;
+  return GCAL_COLOR_LIST[h];
+}
+
 /** Titolo e descrizione allineati a GoogleCalendarService. */
-export function eventFromAppointment(id, data) {
+export function eventFromAppointment(id, data, opts = {}) {
   const service = plain(data?.servizioNome || data?.servizio, 120) || 'Prenotazione';
   const stanza = stanzaLabel(data);
   const operator = plain(data?.employeeNome, 100);
@@ -136,13 +157,33 @@ export function eventFromAppointment(id, data) {
   lines.push(`Codice: ${code}`);
   const start = toDate(data?.start);
   const end = toDate(data?.end);
+  const colorId = parseGcalColorId(opts.colorId)
+    || parseGcalColorId(data?.gcalColorId)
+    || EVENT_COLOR_ID;
   return {
     summary,
     description: lines.join('\n'),
     start: start ? start.toISOString() : null,
     end: end ? end.toISOString() : null,
-    colorId: EVENT_COLOR_ID,
+    colorId,
   };
+}
+
+/** Colore dal servizio Firestore (`services/{servizio}.gcalColorId`), con fallback. */
+export async function loadServiceColorId(db, data) {
+  const fromAppt = parseGcalColorId(data?.gcalColorId);
+  if (fromAppt) return fromAppt;
+  const sid = plain(data?.servizio, 80);
+  if (!sid) return EVENT_COLOR_ID;
+  if (!db) return defaultGcalColorIdFor(sid);
+  try {
+    const snap = await db.doc(`services/${sid}`).get();
+    if (!snap.exists) return defaultGcalColorIdFor(sid);
+    const s = snap.data() || {};
+    return parseGcalColorId(s.gcalColorId) || defaultGcalColorIdFor(sid, s.ordine);
+  } catch {
+    return defaultGcalColorIdFor(sid);
+  }
 }
 
 export function shouldHaveEvent(data) {
@@ -287,8 +328,8 @@ async function persistRotated(db, rotatedRefresh) {
   }, { merge: true });
 }
 
-export async function upsertCalendarEvent({ data, id, eventId, accessToken, calendarId, fetchImpl }) {
-  const ev = eventFromAppointment(id, data);
+export async function upsertCalendarEvent({ data, id, eventId, accessToken, calendarId, fetchImpl, colorId }) {
+  const ev = eventFromAppointment(id, data, { colorId });
   if (!ev.start || !ev.end) throw new Error('missing_dates');
   const body = {
     summary: ev.summary,
@@ -330,7 +371,10 @@ export async function syncAppointmentRecord({ db, data, id, accessToken, calenda
     await db.doc(`appointments/${id}`).update({ calendarEventId: FieldValue.delete() });
     return { action: 'deleted' };
   }
-  const evId = await upsertCalendarEvent({ data, id, eventId: currentId, accessToken, calendarId, fetchImpl });
+  const colorId = await loadServiceColorId(db, data);
+  const evId = await upsertCalendarEvent({
+    data, id, eventId: currentId, accessToken, calendarId, fetchImpl, colorId,
+  });
   if (evId !== currentId) await db.doc(`appointments/${id}`).update({ calendarEventId: evId });
   return { action: currentId && evId === currentId ? 'updated' : 'created', calendarEventId: evId };
 }

@@ -26,9 +26,11 @@ class GoogleCalendarService implements CalendarService {
   @override
   Future<String> createEvent(Appointment a) async {
     if (!isConnected) return fallback.createEvent(a);
-    final r = await _gcal!.callMethod<JSPromise<JSString>>('createEvent'.toJS,
-        _title(a).toJS, _description(a).toJS,
-        a.start.toUtc().toIso8601String().toJS, a.end.toUtc().toIso8601String().toJS).toDart;
+    final r = await _gcal!.callMethodVarArgs<JSPromise<JSString>>('createEvent'.toJS, [
+      _title(a).toJS, _description(a).toJS,
+      a.start.toUtc().toIso8601String().toJS, a.end.toUtc().toIso8601String().toJS,
+      a.service.effectiveGcalColorId.toJS,
+    ]).toDart;
     return r.toDart;
   }
 
@@ -92,7 +94,8 @@ class GoogleCalendarService implements CalendarService {
     if (!isConnected) throw StateError('Google Calendar non collegato');
     final result = await _gcal!.callMethodVarArgs<JSPromise<JSString>>('updateEvent'.toJS, [eventId.toJS,
       _title(a).toJS, _description(a).toJS,
-      a.start.toUtc().toIso8601String().toJS, a.end.toUtc().toIso8601String().toJS]).toDart;
+      a.start.toUtc().toIso8601String().toJS, a.end.toUtc().toIso8601String().toJS,
+      a.service.effectiveGcalColorId.toJS]).toDart;
     return result.toDart;
   }
 
