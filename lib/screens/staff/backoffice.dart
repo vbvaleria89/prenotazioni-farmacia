@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'booking_stats.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../../app.dart';
 import '../../models/service_type.dart';
 import '../../models/settings.dart';
@@ -59,6 +62,7 @@ class _BackofficeState extends State<_BackofficeBody> {
   final _wa = TextEditingController();
   final _waMsg = TextEditingController();
   int _open = 9, _close = 19;
+  bool _importingColors = false;
 
   @override
   void initState() {
@@ -97,6 +101,56 @@ class _BackofficeState extends State<_BackofficeBody> {
       ]);
 
   void _edit(ServiceType? s, int nextOrder) => showDialog(context: context, builder: (_) => _ServiceDialog(service: s, nextOrder: nextOrder));
+
+  Future<void> _importColorsFromGoogle() async {
+    if (_importingColors) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Importa colori da Google'),
+        content: const Text(
+          'Legge i colori già impostati sugli eventi di Google Calendar e li applica ai servizi dell\'app (una tantum).\n\n'
+          'Per i servizi nuovi continuerai a scegliere il colore qui: l\'app lo manderà a Google.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annulla')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Importa')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final m = ScaffoldMessenger.of(context);
+    setState(() => _importingColors = true);
+    try {
+      final token = await FirebaseAuth.instance.currentUser?.getIdToken();
+      if (token == null) throw StateError('Sessione scaduta');
+      final r = await http.post(
+        Uri.base.resolve('/api/gcal-import-colors'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      ).timeout(const Duration(seconds: 60));
+      final body = r.body.isEmpty ? <String, dynamic>{} : jsonDecode(r.body) as Map<String, dynamic>;
+      if (r.statusCode != 200) {
+        final err = body['error']?.toString() ?? 'errore';
+        final msg = switch (err) {
+          'not_connected' || 'token_expired' => 'Google Calendar non collegato o token scaduto. Ricollegalo e riprova.',
+          'forbidden' => 'Solo l\'amministratore può importare i colori.',
+          _ => 'Import non riuscito ($err).',
+        };
+        m.showSnackBar(SnackBar(content: Text(msg)));
+        return;
+      }
+      final updated = (body['updated'] as List?)?.length ?? 0;
+      final skipped = (body['skipped'] as List?)?.length ?? 0;
+      final scanned = body['scannedEvents'] ?? 0;
+      m.showSnackBar(SnackBar(
+        content: Text('Import completato: $updated servizi aggiornati, $skipped invariati (eventi letti: $scanned).'),
+      ));
+    } catch (e) {
+      m.showSnackBar(SnackBar(content: Text('Import non riuscito: $e')));
+    } finally {
+      if (mounted) setState(() => _importingColors = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -139,6 +193,25 @@ class _BackofficeState extends State<_BackofficeBody> {
                       style: FilledButton.styleFrom(backgroundColor: Brand.green),
                       onPressed: () => _edit(null, list.length + 1),
                       icon: const Icon(Icons.add), label: const Text('Aggiungi servizio', style: TextStyle(fontSize: 16)))),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 48,
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _importingColors ? null : _importColorsFromGoogle,
+                        icon: _importingColors
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.palette_outlined),
+                        label: Text(_importingColors ? 'Import in corso…' : 'Importa colori da Google Calendar'),
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.only(top: 6),
+                      child: Text(
+                        'Una tantum: copia sui servizi i colori già usati negli eventi Google. Poi, per i nuovi servizi, scegli il colore qui e l’app lo manda a Google.',
+                        style: TextStyle(fontSize: 12, color: Colors.black54),
+                      ),
+                    ),
                   ]);
                 },
               ),

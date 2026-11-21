@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   eventFromAppointment, shortCode, stanzaLabel, shouldHaveEvent, authorizationUrl,
   handleGcalSync, handleGcalReconcile, handleGcalStatus, handleGcalOauthStart,
-  parseGcalColorId, loadServiceColorId,
+  handleGcalImportColors, parseGcalColorId, loadServiceColorId,
+  serviceNameFromEvent, majorityFromVotes, addColorVote, hexForGcalColorId,
   DEFAULT_CALENDAR_ID, DEFAULT_EXPECTED_EMAIL, GCAL_SCOPE, EVENT_COLOR_ID,
 } from './gcal.mjs';
 
@@ -121,6 +122,12 @@ function isDelete(v) {
   ));
 }
 
+function collectionDocs(store, name) {
+  return [...store.entries()].filter(([k]) => k.startsWith(`${name}/`)).map(([k, v]) => ({
+    id: k.slice(name.length + 1), data: () => v,
+  }));
+}
+
 function memDb(records) {
   const store = new Map(records);
   const db = {
@@ -145,21 +152,22 @@ function memDb(records) {
       },
     }),
     collection: (name) => ({
+      get: async () => ({ docs: collectionDocs(store, name) }),
       where: () => ({
         limit: () => ({
-          get: async () => ({
-            docs: [...store.entries()].filter(([k]) => k.startsWith(`${name}/`)).map(([k, v]) => ({
-              id: k.slice(name.length + 1), data: () => v,
-            })),
-          }),
+          get: async () => ({ docs: collectionDocs(store, name) }),
         }),
+        get: async () => ({ docs: collectionDocs(store, name) }),
       }),
     }),
   };
   return { store, db };
 }
 
-function fixture({ caller = 'staff1', role = 'staff', connected = true, appt, secret = {}, services = [] } = {}) {
+function fixture({
+  caller = 'staff1', role = 'staff', connected = true, appt, secret = {}, services = [],
+  calendarEvents = null,
+} = {}) {
   const data = appt ?? {
     createdBy: 'staff1', clienteUid: 'cust1', status: 'inAttesa',
     servizioNome: 'ECG', roomId: 1, roomName: 'Stanza servizi',
@@ -183,17 +191,21 @@ function fixture({ caller = 'staff1', role = 'staff', connected = true, appt, se
       GOOGLE_CALENDAR_ACCOUNT: DEFAULT_EXPECTED_EMAIL,
     }[name]),
     fetch: async (url, opts) => {
-      calls.push({ url: String(url), method: opts?.method, body: opts?.body, headers: opts?.headers });
+      const method = opts?.method || 'GET';
+      calls.push({ url: String(url), method, body: opts?.body, headers: opts?.headers });
       if (String(url).includes('oauth2.googleapis.com/token')) {
         return new Response(JSON.stringify({ access_token: 'at-1', refresh_token: 'rt-1' }), { status: 200 });
       }
-      if (String(url).includes('/calendars/') && opts?.method === 'POST') {
+      if (String(url).includes('/calendars/') && String(url).includes('/events') && method === 'GET') {
+        return new Response(JSON.stringify({ items: calendarEvents || [] }), { status: 200 });
+      }
+      if (String(url).includes('/calendars/') && method === 'POST') {
         return new Response(JSON.stringify({ id: 'evt-new' }), { status: 200 });
       }
-      if (String(url).includes('/calendars/') && opts?.method === 'PATCH') {
+      if (String(url).includes('/calendars/') && method === 'PATCH') {
         return new Response(JSON.stringify({ id: 'evt-old' }), { status: 200 });
       }
-      if (String(url).includes('/calendars/') && opts?.method === 'DELETE') {
+      if (String(url).includes('/calendars/') && method === 'DELETE') {
         return new Response(null, { status: 204 });
       }
       return new Response('{}', { status: 404 });
@@ -373,4 +385,59 @@ test('token scaduto (invalid_grant): status scollegato, sync/reconcile 503 token
   const st2 = await (await handleGcalStatus(request('/api/gcal-status', { method: 'GET', token: 'ok' }), f.deps)).json();
   assert.equal(st2.connected, true);
   assert.equal(f.store.get('serverSecrets/gcal').tokenError, undefined);
+});
+
+test('serviceNameFromEvent e majority colori', () => {
+  assert.equal(serviceNameFromEvent({
+    summary: 'Mario · Holter Cardiaco',
+    description: 'Servizio: Holter Cardiaco\nStanza: 1',
+  }), 'Holter Cardiaco');
+  assert.equal(serviceNameFromEvent({ summary: 'Mario · ECG' }), 'ECG');
+  assert.equal(hexForGcalColorId('4'), '#FF887C');
+  const votes = new Map();
+  addColorVote(votes, 'holter', '4');
+  addColorVote(votes, 'holter', '4');
+  addColorVote(votes, 'holter', '1');
+  const win = majorityFromVotes(votes).get('holter');
+  assert.equal(win.colorId, '4');
+  assert.equal(win.votes, 2);
+  assert.equal(win.total, 3);
+});
+
+test('gcal-import-colors: solo admin; importa colorId da eventi Google sui servizi', async () => {
+  const staff = fixture({ caller: 'staff1' });
+  assert.equal((await handleGcalImportColors(request('/api/gcal-import-colors', { token: 'ok' }), staff.deps)).status, 403);
+
+  const f = fixture({
+    caller: 'admin1',
+    appt: {
+      createdBy: 'staff1', status: 'confermato', calendarEventId: 'evt-holter',
+      servizio: 'holter', servizioNome: 'Holter Cardiaco', roomId: 1,
+      start: new Date(), end: new Date(),
+    },
+    services: [
+      ['services/holter', { nome: 'Holter Cardiaco', gcalColorId: '1', colore: '#A4BDFC' }],
+      ['services/analisi', { nome: 'Analisi varie' }],
+    ],
+    calendarEvents: [
+      {
+        id: 'evt-holter', summary: 'Mario · Holter Cardiaco',
+        description: 'Servizio: Holter Cardiaco', colorId: '4',
+      },
+      {
+        id: 'evt-analisi', summary: 'Luigi · Analisi varie',
+        description: 'Servizio: Analisi varie', colorId: '10',
+      },
+    ],
+  });
+  const r = await handleGcalImportColors(request('/api/gcal-import-colors', { token: 'ok' }), f.deps);
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.scannedEvents, 2);
+  assert.equal(body.updated.length, 2);
+  assert.equal(f.store.get('services/holter').gcalColorId, '4');
+  assert.equal(f.store.get('services/holter').colore, '#FF887C');
+  assert.equal(f.store.get('services/analisi').gcalColorId, '10');
+  assert.equal(f.store.get('services/analisi').colore, '#51B749');
 });
