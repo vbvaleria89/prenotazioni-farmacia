@@ -176,6 +176,23 @@ class BookingService extends ChangeNotifier {
 
   Future<void> saveService(ServiceType s) => servicesRef.doc(s.id).set(s.toMap(), SetOptions(merge: true));
 
+  /// Migrazione: servizi senza `colore`/`gcalColorId` ricevono un default dalla palette Google.
+  Future<void> seedServiceColorsIfMissing() async {
+    final q = await servicesRef.get();
+    for (final d in q.docs) {
+      final raw = d.data();
+      final hasId = (raw['gcalColorId'] ?? '').toString().trim().isNotEmpty;
+      final hasHex = (raw['colore'] ?? '').toString().trim().isNotEmpty;
+      if (hasId && hasHex) continue;
+      final s = ServiceType.fromDoc(d);
+      await d.reference.set({
+        'colore': s.effectiveColore,
+        'gcalColorId': s.effectiveGcalColorId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+  }
+
   /// Seed/migrazione: se `services` è vuota crea i servizi di base, importando giorni e persona del tricologico da settings.
   Future<void> seedServicesIfEmpty() async {
     if ((await servicesRef.limit(1).get()).docs.isNotEmpty) return;
@@ -184,7 +201,8 @@ class BookingService extends ChangeNotifier {
       final t = s.id == 'tricologico';
       await saveService(ServiceType(id: s.id, name: s.name, description: s.description, duration: s.duration, ordine: s.ordine,
           giorni: t ? cfg.tricologicoDays : const {}, dipendenteId: t ? cfg.tricologoEmployeeId : '', dipendenteNome: t ? cfg.tricologoNome : '',
-          stanze: s.stanze, deviceId: s.deviceId, deviceHoldHours: s.deviceHoldHours));
+          stanze: s.stanze, deviceId: s.deviceId, deviceHoldHours: s.deviceHoldHours,
+          colore: s.effectiveColore, gcalColorId: s.effectiveGcalColorId));
     }
   }
 

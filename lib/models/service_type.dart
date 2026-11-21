@@ -1,8 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'device.dart';
 import 'room.dart';
+import 'service_colors.dart';
 export 'device.dart';
 export 'room.dart';
+export 'service_colors.dart';
 
 /// Stanze fisse della farmacia (1 e 2). Una prenotazione ne occupa sempre una sola.
 const int kStanza1 = 1;
@@ -35,10 +38,25 @@ class ServiceType {
   final String deviceId;
   /// Ore in cui l'apparecchio resta occupato dopo l'inizio (es. 24 per l'Holter).
   final int deviceHoldHours;
+  /// Hex `#RRGGBB` per calendario app; allineato a [gcalColorId] (palette Google 1–11).
+  final String colore;
+  /// ID colore evento Google Calendar (`1`…`11`).
+  final String gcalColorId;
 
   const ServiceType({required this.id, required this.name, required this.description, required this.duration,
       this.attivo = true, this.prezzo, this.prezzoScontato, this.giorni = const {}, this.dipendenteId = '', this.dipendenteNome = '', this.ordine = 0,
-      this.stanze = const {kStanza1}, this.deviceId = '', this.deviceHoldHours = 0});
+      this.stanze = const {kStanza1}, this.deviceId = '', this.deviceHoldHours = 0,
+      this.colore = '', this.gcalColorId = ''});
+
+  ServiceColorOption get colorOption {
+    if (gcalColorId.isNotEmpty) return serviceColorByGcalId(gcalColorId);
+    if (colore.isNotEmpty) return serviceColorByHex(colore);
+    return defaultServiceColorFor(id: id, ordine: ordine);
+  }
+
+  Color get calendarColor => colorOption.color;
+  String get effectiveGcalColorId => colorOption.gcalColorId;
+  String get effectiveColore => colorOption.hex;
 
   bool get scontato => prezzo != null && prezzoScontato != null && prezzoScontato! < prezzo!;
   double? get prezzoFinale => scontato ? prezzoScontato : prezzo;
@@ -86,7 +104,25 @@ class ServiceType {
     return out.isEmpty ? const {kStanza1} : out;
   }
 
-  factory ServiceType.fromMap(String id, Map<String, dynamic> m) => ServiceType(
+  static (String colore, String gcalColorId) _parseColor(Map<String, dynamic> m, String id, int ordine) {
+    final rawId = (m['gcalColorId'] ?? '').toString().trim();
+    final rawHex = normalizeServiceHex((m['colore'] ?? '').toString());
+    if (rawId.isNotEmpty) {
+      final opt = serviceColorByGcalId(rawId);
+      return (opt.hex, opt.gcalColorId);
+    }
+    if (rawHex != null) {
+      final opt = serviceColorByHex(rawHex);
+      return (opt.hex, opt.gcalColorId);
+    }
+    final opt = defaultServiceColorFor(id: id, ordine: ordine);
+    return (opt.hex, opt.gcalColorId);
+  }
+
+  factory ServiceType.fromMap(String id, Map<String, dynamic> m) {
+    final ordine = (m['ordine'] as num? ?? 0).toInt();
+    final colors = _parseColor(m, id, ordine);
+    return ServiceType(
         id: id,
         name: (m['nome'] ?? id) as String,
         description: (m['descrizione'] ?? '') as String,
@@ -97,11 +133,14 @@ class ServiceType {
         giorni: {for (final d in (m['giorni'] as List? ?? const [])) (d as num).toInt()},
         dipendenteId: (m['dipendenteId'] ?? '') as String,
         dipendenteNome: (m['dipendenteNome'] ?? '') as String,
-        ordine: (m['ordine'] as num? ?? 0).toInt(),
+        ordine: ordine,
         stanze: _parseStanze(m['stanze']),
         deviceId: _parseDeviceId(m, (m['nome'] ?? id) as String, id),
         deviceHoldHours: _parseHoldHours(m, (m['nome'] ?? id) as String, id),
+        colore: colors.$1,
+        gcalColorId: colors.$2,
       );
+  }
 
   factory ServiceType.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) => ServiceType.fromMap(d.id, d.data() ?? {});
 
@@ -112,6 +151,8 @@ class ServiceType {
         'stanze': stanzeOrdinate,
         'deviceId': deviceId,
         'deviceHoldHours': deviceHoldHours,
+        'colore': effectiveColore,
+        'gcalColorId': effectiveGcalColorId,
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
@@ -136,8 +177,8 @@ String euro(double v) => '€ ${v.toStringAsFixed(2).replaceAll('.', ',')}';
 
 // Seed iniziale (usato solo se la collezione `services` è vuota). NO Otopharma. Default Stanza 1.
 const mockServices = [
-  ServiceType(id: 'tricologico', name: 'Analisi tricologica', description: 'Check-up di capelli e cuoio capelluto', duration: Duration(minutes: 30), giorni: {2, 4}, ordine: 1, stanze: {kStanza1}),
-  ServiceType(id: 'holter', name: 'Holter Cardiaco', description: 'Applicazione Holter cardiaco', duration: Duration(minutes: 20), ordine: 2, stanze: {kStanza1}, deviceId: Device.holterId, deviceHoldHours: Device.holterDefaultHours),
-  ServiceType(id: 'holter-pressorio', name: 'Holter Pressorio', description: 'Applicazione Holter pressorio', duration: Duration(minutes: 20), ordine: 3, stanze: {kStanza1}, deviceId: Device.holterPressorioId, deviceHoldHours: Device.holterDefaultHours),
-  ServiceType(id: 'analisi', name: 'Analisi varie', description: 'Glicemia, colesterolo, ecc.', duration: Duration(minutes: 15), ordine: 4, stanze: {kStanza1}),
+  ServiceType(id: 'tricologico', name: 'Analisi tricologica', description: 'Check-up di capelli e cuoio capelluto', duration: Duration(minutes: 30), giorni: {2, 4}, ordine: 1, stanze: {kStanza1}, colore: '#A4BDFC', gcalColorId: '1'),
+  ServiceType(id: 'holter', name: 'Holter Cardiaco', description: 'Applicazione Holter cardiaco', duration: Duration(minutes: 20), ordine: 2, stanze: {kStanza1}, deviceId: Device.holterId, deviceHoldHours: Device.holterDefaultHours, colore: '#FF887C', gcalColorId: '4'),
+  ServiceType(id: 'holter-pressorio', name: 'Holter Pressorio', description: 'Applicazione Holter pressorio', duration: Duration(minutes: 20), ordine: 3, stanze: {kStanza1}, deviceId: Device.holterPressorioId, deviceHoldHours: Device.holterDefaultHours, colore: '#FFB878', gcalColorId: '6'),
+  ServiceType(id: 'analisi', name: 'Analisi varie', description: 'Glicemia, colesterolo, ecc.', duration: Duration(minutes: 15), ordine: 4, stanze: {kStanza1}, colore: '#51B749', gcalColorId: '10'),
 ];
