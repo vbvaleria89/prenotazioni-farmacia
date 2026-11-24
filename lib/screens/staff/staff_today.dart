@@ -165,7 +165,7 @@ class _Tile extends StatelessWidget {
       if (a.blocksRoom) ('Annulla', Icons.close, const Color(0xFFC62828), () => annullaPrenotazione(context, a)),
       if (a.rimborsoPending) ('Rimborsato', Icons.currency_exchange, const Color(0xFF9B2C2C), () => segnaRimborsato(context, a)),
       if (!a.pagato && a.status != AppointmentStatus.annullato) ('Pagato', Icons.euro, const Color(0xFF2E9E4F), () => segnaPagato(context, a)),
-      if (waClienteLink(a) != null) ('WhatsApp', Icons.chat, const Color(0xFF1B7A3D), () => openExternal(waClienteLink(a)!)),
+      if (waClienteDigits(a) != null) ('WhatsApp', Icons.chat, const Color(0xFF1B7A3D), () => apriWhatsAppCliente(a)),
     ];
     final showSecondary = a.status != AppointmentStatus.annullato
         ? (active ? secondary : [for (final x in secondary) if (x.$1 != 'Riprogramma' && x.$1 != 'Libera') x])

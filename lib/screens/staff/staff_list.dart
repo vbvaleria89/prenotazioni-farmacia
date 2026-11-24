@@ -6,7 +6,6 @@ import '../../theme/brand.dart';
 import '../client/slot_picker.dart' show hhmm;
 import 'ricetta_info.dart';
 import 'edit_booking.dart';
-import '../../services/open_link.dart';
 
 /// Elenco prenotazioni (tabella con ricerca e azioni su riga).
 class StaffBookingList extends StatefulWidget {
@@ -90,7 +89,7 @@ class _StaffBookingListState extends State<StaffBookingList> {
           TextButton(onPressed: () => Navigator.pop(c), child: Text(fine ? 'Chiudi' : 'Interrompi')),
           if (!fine) TextButton(onPressed: () => set(() => i++), child: const Text('Salta')),
           if (!fine) FilledButton.icon(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF25D366)),
-              onPressed: () { openExternal(waClienteLink(a!)!); set(() => i++); },
+              onPressed: () { apriWhatsAppCliente(a!); set(() => i++); },
               icon: const Icon(Icons.chat), label: const Text('Apri WhatsApp')),
         ],
       );
@@ -101,7 +100,7 @@ class _StaffBookingListState extends State<StaffBookingList> {
     final sel = rows.where((a) => _sel.contains(a.id)).toList();
     if (sel.isEmpty) return const SizedBox.shrink();
     final daConf = sel.where((a) => a.blocksRoom && a.status == AppointmentStatus.inAttesa).length;
-    final waSel = sel.where((a) => waClienteLink(a) != null).toList();
+    final waSel = sel.where((a) => waClienteDigits(a) != null).toList();
     return Material(color: Colors.blue.shade50, child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [

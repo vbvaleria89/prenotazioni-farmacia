@@ -9,6 +9,10 @@ class PharmacySettings {
   final String tricologoEmployeeId, tricologoNome, serviziNote, whatsapp;
   /// Template messaggio cliente → farmacia; usa `[Nome]` per il nome del cliente.
   final String whatsappClientMessage;
+  /// Promemoria staff → cliente. Segnaposto: `[Nome]` `[Servizio]` `[Giorno]` `[Ora]` `[Codice]`.
+  final String whatsappStaffMessage;
+  /// Promemoria Holter con rimozione. In più: `[RimozioneGiorno]` `[RimozioneOra]`.
+  final String whatsappStaffHolterMessage;
   const PharmacySettings({
     this.openHour = 9,
     this.closeHour = 19,
@@ -18,11 +22,15 @@ class PharmacySettings {
     this.serviziNote = '',
     this.whatsapp = '',
     this.whatsappClientMessage = kDefaultWhatsappClientMessage,
+    this.whatsappStaffMessage = kDefaultWhatsappStaffMessage,
+    this.whatsappStaffHolterMessage = kDefaultWhatsappStaffHolterMessage,
   });
 
   factory PharmacySettings.fromMap(Map<String, dynamic>? m) {
     if (m == null) return const PharmacySettings();
     final rawMsg = (m['whatsappClientMessage'] ?? '').toString().trim();
+    final rawStaff = (m['whatsappStaffMessage'] ?? '').toString().trim();
+    final rawHolter = (m['whatsappStaffHolterMessage'] ?? '').toString().trim();
     return PharmacySettings(
       openHour: (m['openHour'] ?? 9) as int,
       closeHour: (m['closeHour'] ?? 19) as int,
@@ -32,6 +40,8 @@ class PharmacySettings {
       serviziNote: (m['serviziNote'] ?? '') as String,
       whatsapp: (m['whatsapp'] ?? '') as String,
       whatsappClientMessage: rawMsg.isEmpty ? kDefaultWhatsappClientMessage : rawMsg,
+      whatsappStaffMessage: rawStaff.isEmpty ? kDefaultWhatsappStaffMessage : rawStaff,
+      whatsappStaffHolterMessage: rawHolter.isEmpty ? kDefaultWhatsappStaffHolterMessage : rawHolter,
     );
   }
 
@@ -46,6 +56,12 @@ class PharmacySettings {
         'whatsappClientMessage': whatsappClientMessage.trim().isEmpty
             ? kDefaultWhatsappClientMessage
             : whatsappClientMessage.trim(),
+        'whatsappStaffMessage': whatsappStaffMessage.trim().isEmpty
+            ? kDefaultWhatsappStaffMessage
+            : whatsappStaffMessage.trim(),
+        'whatsappStaffHolterMessage': whatsappStaffHolterMessage.trim().isEmpty
+            ? kDefaultWhatsappStaffHolterMessage
+            : whatsappStaffHolterMessage.trim(),
         'updatedAt': FieldValue.serverTimestamp(),
       };
 }

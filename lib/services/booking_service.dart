@@ -157,6 +157,13 @@ class BookingService extends ChangeNotifier {
   }
 
   Future<PharmacySettings> settings() async => PharmacySettings.fromMap((await settingsRef.get()).data());
+
+  Future<Appointment?> appointmentById(String id) async {
+    if (id.isEmpty) return null;
+    final d = await _appts.doc(id).get();
+    if (!d.exists || d.data() == null) return null;
+    return Appointment.fromDoc(d);
+  }
   Stream<PharmacySettings> settingsStream() => settingsRef.snapshots().map((d) => PharmacySettings.fromMap(d.data()));
   Future<void> saveSettings(PharmacySettings s) => settingsRef.set(s.toMap(), SetOptions(merge: true));
 

@@ -61,6 +61,8 @@ class _BackofficeState extends State<_BackofficeBody> {
   final _note = TextEditingController();
   final _wa = TextEditingController();
   final _waMsg = TextEditingController();
+  final _waStaff = TextEditingController();
+  final _waHolter = TextEditingController();
   int _open = 9, _close = 19;
   bool _importingColors = false;
   bool _pushingColors = false;
@@ -77,6 +79,8 @@ class _BackofficeState extends State<_BackofficeBody> {
           _note.text = s.serviziNote;
           _wa.text = s.whatsapp;
           _waMsg.text = s.whatsappClientMessage;
+          _waStaff.text = s.whatsappStaffMessage;
+          _waHolter.text = s.whatsappStaffHolterMessage;
           _open = s.openHour;
           _close = s.closeHour;
         }));
@@ -88,7 +92,10 @@ class _BackofficeState extends State<_BackofficeBody> {
     try {
       await bookingService.saveSettings(PharmacySettings(openHour: _open, closeHour: _close, tricologicoDays: s.tricologicoDays,
           tricologoEmployeeId: s.tricologoEmployeeId, tricologoNome: s.tricologoNome, serviziNote: _note.text.trim(),
-          whatsapp: _wa.text.trim(), whatsappClientMessage: _waMsg.text.trim().isEmpty ? kDefaultWhatsappClientMessage : _waMsg.text.trim()));
+          whatsapp: _wa.text.trim(),
+          whatsappClientMessage: _waMsg.text.trim().isEmpty ? kDefaultWhatsappClientMessage : _waMsg.text.trim(),
+          whatsappStaffMessage: _waStaff.text.trim().isEmpty ? kDefaultWhatsappStaffMessage : _waStaff.text.trim(),
+          whatsappStaffHolterMessage: _waHolter.text.trim().isEmpty ? kDefaultWhatsappStaffHolterMessage : _waHolter.text.trim()));
       m.showSnackBar(const SnackBar(content: Text('Impostazioni salvate')));
     } catch (e) {
       m.showSnackBar(SnackBar(content: Text('Salvataggio non riuscito: $e')));
@@ -308,6 +315,22 @@ class _BackofficeState extends State<_BackofficeBody> {
                 decoration: const InputDecoration(
                   labelText: 'Messaggio WhatsApp (Area personale cliente)',
                   helperText: 'Usa [Nome] per il nome del cliente. Vuoto = messaggio predefinito.',
+                ),
+              ),
+              TextField(
+                controller: _waStaff,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Promemoria WhatsApp allo staff (prenotazione)',
+                  helperText: 'Segnaposto: [Nome] [Servizio] [Giorno] [Ora] [Codice]. Vuoto = testo predefinito.',
+                ),
+              ),
+              TextField(
+                controller: _waHolter,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Promemoria WhatsApp Holter (applicazione e rimozione)',
+                  helperText: 'In più: [RimozioneGiorno] [RimozioneOra]. Usato dal bottone della prima prenotazione.',
                 ),
               ),
               const SizedBox(height: 16),

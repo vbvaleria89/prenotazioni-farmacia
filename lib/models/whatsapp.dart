@@ -19,6 +19,59 @@ String whatsAppLink(String? raw, {String? text}) {
   return '$base?text=${Uri.encodeComponent(t)}';
 }
 
+/// Promemoria staff → cliente, una prenotazione.
+const kDefaultWhatsappStaffMessage =
+    'Buongiorno [Nome], le ricordiamo la prenotazione presso Farmacia San Ciro: '
+    '[Servizio] il [Giorno] alle ore [Ora]. '
+    'Codice prenotazione: [Codice]. '
+    'Per modifiche o disdette risponda a questo messaggio. Grazie!';
+
+/// Promemoria staff → cliente quando c'è anche la rimozione Holter.
+const kDefaultWhatsappStaffHolterMessage =
+    'Buongiorno [Nome], le ricordiamo che ha prenotato [Servizio] per il [Giorno] alle ore [Ora], '
+    'e la rimozione il [RimozioneGiorno] alle ore [RimozioneOra]. '
+    'Codice prenotazione: [Codice]. '
+    'Per modifiche o disdette risponda a questo messaggio. Grazie!';
+
+const _mesiLunghi = [
+  'gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno',
+  'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre',
+];
+
+String whatsappGiorno(DateTime d) => '${d.day} ${_mesiLunghi[d.month - 1]}';
+
+String whatsappOra(DateTime d) =>
+    '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+/// Compila il promemoria dello staff. Se [rimozione] è valorizzata usa il testo Holter.
+String fillWhatsappStaffMessage({
+  String? template,
+  String? holterTemplate,
+  required String nome,
+  required String servizio,
+  required DateTime quando,
+  required String codice,
+  DateTime? rimozione,
+}) {
+  final conRimozione = rimozione != null;
+  final raw = conRimozione
+      ? ((holterTemplate ?? '').trim().isEmpty ? kDefaultWhatsappStaffHolterMessage : holterTemplate!.trim())
+      : ((template ?? '').trim().isEmpty ? kDefaultWhatsappStaffMessage : template!.trim());
+  final chi = nome.trim();
+  var t = chi.isEmpty ? raw.replaceAll('[Nome]', '') : raw.replaceAll('[Nome]', chi);
+  t = t
+      .replaceAll('[Servizio]', servizio.trim())
+      .replaceAll('[Giorno]', whatsappGiorno(quando))
+      .replaceAll('[Ora]', whatsappOra(quando))
+      .replaceAll('[Codice]', codice.trim());
+  if (conRimozione) {
+    t = t
+        .replaceAll('[RimozioneGiorno]', whatsappGiorno(rimozione))
+        .replaceAll('[RimozioneOra]', whatsappOra(rimozione));
+  }
+  return t.replaceAll(RegExp(r'[ \t]{2,}'), ' ').replaceAll(RegExp(r'\s+,'), ',').trim();
+}
+
 /// Compila il template WhatsApp cliente: sostituisce `[Nome]` con [nomeCliente].
 /// Se il nome manca, rimuove «sono [Nome], » e lascia «Buongiorno, vorrei…».
 String fillWhatsappClientMessage(String template, String? nomeCliente) {

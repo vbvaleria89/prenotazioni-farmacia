@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../app.dart';
 import '../../models/appointment.dart';
+import '../../models/whatsapp.dart';
 import '../../services/open_link.dart';
 
 /// Dialog per inserire o aggiornare impegnativa/ricetta in un secondo momento.
@@ -269,39 +270,66 @@ Future<void> segnaPagato(BuildContext context, Appointment a) async {
   catch (e) { m.showSnackBar(SnackBar(content: Text('Operazione non riuscita: $e'))); }
 }
 
-/// Link wa.me verso il telefono del cliente; null se il numero non è valido.
-String? waClienteLink(Appointment a) {
+/// Cifre internazionali del telefono cliente. Null se il numero non è valido
+/// o se l'appuntamento è la rimozione (il promemoria parte dall'applicazione).
+String? waClienteDigits(Appointment a) {
+  if (a.isRimozione) return null;
   var d = a.phone.replaceAll(RegExp(r'\D'), '');
   if (d.startsWith('00')) d = d.substring(2);
   if (d.length == 10 && d.startsWith('3')) d = '39$d';
   if (d.length < 11 || d.length > 15) return null;
-  const mesi = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
-  final s = a.start;
-  final ora = '${s.hour.toString().padLeft(2, '0')}:${s.minute.toString().padLeft(2, '0')}';
-  final nome = a.customerName.trim().isEmpty ? '' : ' ${a.customerName.trim()}';
-  final msg = 'Buongiorno$nome, le ricordiamo la prenotazione presso Farmacia San Ciro: '
-      '${a.service.name} il ${s.day} ${mesi[s.month - 1]} alle ore $ora. '
-      'Codice prenotazione: ${a.id.substring(0, 6).toUpperCase()}. '
-      'Per modifiche o disdette risponda a questo messaggio. Grazie!';
+  return d;
+}
+
+/// Link wa.me. Se c'è una rimozione ancora attiva, il testo la include.
+Future<String?> waClienteLink(Appointment a) async {
+  final d = waClienteDigits(a);
+  if (d == null) return null;
+  DateTime? rimozione;
+  final childId = a.rimozioneId;
+  if (childId != null && childId.isNotEmpty) {
+    final child = await bookingService.appointmentById(childId);
+    if (child != null && child.blocksRoom) rimozione = child.start;
+  }
+  var standard = kDefaultWhatsappStaffMessage;
+  var holter = kDefaultWhatsappStaffHolterMessage;
+  try {
+    final s = await bookingService.settings();
+    standard = s.whatsappStaffMessage;
+    holter = s.whatsappStaffHolterMessage;
+  } catch (_) {}
+  final msg = fillWhatsappStaffMessage(
+    template: standard,
+    holterTemplate: holter,
+    nome: a.customerName,
+    servizio: a.service.name,
+    quando: a.start,
+    codice: a.shortCode,
+    rimozione: rimozione,
+  );
   return 'https://wa.me/$d?text=${Uri.encodeComponent(msg)}';
 }
 
-/// Bottone WhatsApp verso il cliente (nascosto se manca il telefono).
+Future<void> apriWhatsAppCliente(Appointment a) async {
+  final link = await waClienteLink(a);
+  if (link != null) openExternal(link);
+}
+
+/// Bottone WhatsApp verso il cliente (nascosto se manca il telefono o è una rimozione).
 class WhatsAppClienteButton extends StatelessWidget {
   final Appointment a;
   final bool big;
   const WhatsAppClienteButton(this.a, {super.key, this.big = false});
   @override
   Widget build(BuildContext context) {
-    final link = waClienteLink(a);
-    if (link == null) return const SizedBox.shrink();
+    if (waClienteDigits(a) == null) return const SizedBox.shrink();
     const green = Color(0xFF25D366);
     if (big) {
       return SizedBox(height: 56, child: FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: green),
-        onPressed: () => openExternal(link), icon: const Icon(Icons.chat), label: const Text('WhatsApp', style: TextStyle(fontSize: 18))));
+        onPressed: () => apriWhatsAppCliente(a), icon: const Icon(Icons.chat), label: const Text('WhatsApp', style: TextStyle(fontSize: 18))));
     }
-    return TextButton.icon(onPressed: () => openExternal(link), icon: const Icon(Icons.chat, size: 16, color: green), label: const Text('WhatsApp'));
+    return TextButton.icon(onPressed: () => apriWhatsAppCliente(a), icon: const Icon(Icons.chat, size: 16, color: green), label: const Text('WhatsApp'));
   }
 }
 
