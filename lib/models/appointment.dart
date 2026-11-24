@@ -45,18 +45,23 @@ class Appointment {
   final String? rimborsoStato;
   final DateTime? rimborsoAt;
   final bool clienteChiamato;
+  /// Id dell'applicazione Holter, se questo appuntamento è la rimozione.
+  final String? rimozioneDi;
+  /// Id della rimozione collegata, se questo appuntamento è l'applicazione.
+  final String? rimozioneId;
 
   Appointment({required this.id, required this.service, required this.start, DateTime? end, required this.customerName, required this.phone, this.email,
       this.status = AppointmentStatus.inAttesa, this.createdBy, this.calendarEventId, this.employeeId, this.employeeNome, this.esenzione = false, this.ricettaNumero, this.ricettaNote, this.ricettaFoto = false, this.pagato = false, this.metodoPagamento, this.clienteUid, this.clienteAccount, this.codiceFiscale,
-      this.roomId = kStanza1, this.roomName, this.deviceId, this.deviceHoldHours, this.annullatoDa, this.annullatoAt, this.rimborsoRichiesto = false, this.rimborsoStato, this.rimborsoAt, this.clienteChiamato = false})
+      this.roomId = kStanza1, this.roomName, this.deviceId, this.deviceHoldHours, this.annullatoDa, this.annullatoAt, this.rimborsoRichiesto = false, this.rimborsoStato, this.rimborsoAt, this.clienteChiamato = false, this.rimozioneDi, this.rimozioneId})
       : end = end ?? start.add(service.duration);
 
+  bool get isRimozione => (rimozioneDi ?? '').isNotEmpty;
   bool get blocksRoom => status == AppointmentStatus.inAttesa || status == AppointmentStatus.confermato;
   bool overlaps(DateTime s, DateTime e) => start.isBefore(e) && s.isBefore(end);
   String get stanzaLabel => Room.label(roomId, fallback: roomName);
   String get effectiveDeviceId => (deviceId ?? '').isNotEmpty ? deviceId! : service.deviceId;
   int get effectiveHoldHours => (deviceHoldHours ?? 0) > 0 ? deviceHoldHours! : service.deviceHoldHours;
-  bool get usesDevice => effectiveDeviceId.isNotEmpty && effectiveHoldHours > 0;
+  bool get usesDevice => !isRimozione && effectiveDeviceId.isNotEmpty && effectiveHoldHours > 0;
   DateTime get deviceHoldEnd => start.add(Duration(hours: effectiveHoldHours));
   bool get rimborsoPending => rimborsoRichiesto && rimborsoStato == 'pending';
   bool get rimborsoDone => rimborsoStato == 'done';
@@ -130,6 +135,8 @@ class Appointment {
       rimborsoStato: m['rimborsoStato'] as String?,
       rimborsoAt: ts(m['rimborsoAt']),
       clienteChiamato: (m['clienteChiamato'] ?? false) as bool,
+      rimozioneDi: (m['rimozioneDi'] as String?)?.trim().isNotEmpty == true ? (m['rimozioneDi'] as String).trim() : null,
+      rimozioneId: (m['rimozioneId'] as String?)?.trim().isNotEmpty == true ? (m['rimozioneId'] as String).trim() : null,
     );
   }
 
@@ -160,6 +167,8 @@ class Appointment {
         'roomName': Room.registry[roomId]?.nome ?? roomName,
         if (usesDevice) 'deviceId': effectiveDeviceId,
         if (usesDevice) 'deviceHoldHours': effectiveHoldHours,
+        if (isRimozione) 'rimozioneDi': rimozioneDi,
+        if ((rimozioneId ?? '').isNotEmpty) 'rimozioneId': rimozioneId,
         'createdAt': FieldValue.serverTimestamp(),
       };
 }
