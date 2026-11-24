@@ -152,18 +152,48 @@ class _Tile extends StatelessWidget {
       try { await f(); } catch (e) { m.showSnackBar(SnackBar(content: Text('Operazione non riuscita: $e'))); }
     }
     final active = a.blocksRoom;
-    final actions = <(String, IconData, Color, VoidCallback?)>[
-      ('Correggi dati cliente', Icons.person_outline, const Color(0xFF32448C), () => apriCorrezioneCliente(context, a)),
-      if (a.status != AppointmentStatus.annullato) ('Modifica', Icons.edit, const Color(0xFF32448C), () => apriModificaPrenotazione(context, a)),
-      if (a.status != AppointmentStatus.annullato) ('Ricetta', Icons.medication_outlined, const Color(0xFF32448C), () => apriRicetta(context, a)),
-      if (a.blocksRoom) ('Riprogramma', Icons.event_repeat, const Color(0xFF32448C), () => apriRiprogramma(context, a, asStaff: true)),
-      ('Conferma', Icons.check, Colors.green, a.status == AppointmentStatus.inAttesa ? () => run(() => bookingService.confirm(a)) : null),
-      if (a.blocksRoom) ('Annulla', Icons.close, Colors.red, () => annullaPrenotazione(context, a)),
-      if (a.rimborsoPending) ('Segna rimborsato', Icons.currency_exchange, const Color(0xFF9B2C2C), () => segnaRimborsato(context, a)),
-      ('Libera stanza', Icons.meeting_room, Colors.blue, () => run(() => bookingService.freeRoom(a))),
-      if (!a.pagato) ('Pagato', Icons.euro, const Color(0xFF2E9E4F), () => segnaPagato(context, a)),
-      if (waClienteLink(a) != null) ('WhatsApp', Icons.chat, const Color(0xFF25D366), () => openExternal(waClienteLink(a)!)),
+    // secondarie = dati/organizzazione; principali = stato/pagamento/contatto
+    final secondary = <(String, IconData, VoidCallback)>[
+      ('Cliente', Icons.person_outline, () => apriCorrezioneCliente(context, a)),
+      if (a.status != AppointmentStatus.annullato) ('Modifica', Icons.edit, () => apriModificaPrenotazione(context, a)),
+      if (a.status != AppointmentStatus.annullato) ('Ricetta', Icons.medication_outlined, () => apriRicetta(context, a)),
+      if (a.blocksRoom) ('Riprogramma', Icons.event_repeat, () => apriRiprogramma(context, a, asStaff: true)),
+      if (a.blocksRoom) ('Libera', Icons.meeting_room, () => run(() => bookingService.freeRoom(a))),
     ];
+    final primary = <(String, IconData, Color, VoidCallback?)>[
+      if (a.status == AppointmentStatus.inAttesa) ('Conferma', Icons.check, const Color(0xFF2E9E4F), () => run(() => bookingService.confirm(a))),
+      if (a.blocksRoom) ('Annulla', Icons.close, const Color(0xFFC62828), () => annullaPrenotazione(context, a)),
+      if (a.rimborsoPending) ('Rimborsato', Icons.currency_exchange, const Color(0xFF9B2C2C), () => segnaRimborsato(context, a)),
+      if (!a.pagato && a.status != AppointmentStatus.annullato) ('Pagato', Icons.euro, const Color(0xFF2E9E4F), () => segnaPagato(context, a)),
+      if (waClienteLink(a) != null) ('WhatsApp', Icons.chat, const Color(0xFF1B7A3D), () => openExternal(waClienteLink(a)!)),
+    ];
+    final showSecondary = a.status != AppointmentStatus.annullato
+        ? (active ? secondary : [for (final x in secondary) if (x.$1 != 'Riprogramma' && x.$1 != 'Libera') x])
+        : [for (final x in secondary) if (x.$1 == 'Cliente') x];
+    final showPrimary = a.status == AppointmentStatus.annullato
+        ? [for (final x in primary) if (x.$1 == 'Rimborsato' || x.$1 == 'WhatsApp') x]
+        : primary;
+    Widget secondaryBtn((String, IconData, VoidCallback) x) => OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Brand.primary,
+            side: BorderSide(color: Brand.primary.withValues(alpha: 0.35)),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            visualDensity: VisualDensity.compact,
+          ),
+          onPressed: x.$3,
+          icon: Icon(x.$2, size: 18),
+          label: Text(x.$1, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        );
+    Widget primaryBtn((String, IconData, Color, VoidCallback?) x) => FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: x.$3,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            visualDensity: VisualDensity.compact,
+          ),
+          onPressed: x.$4,
+          icon: Icon(x.$2, size: 18),
+          label: Text(x.$1, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+        );
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -180,33 +210,14 @@ class _Tile extends StatelessWidget {
             backgroundColor: a.esenzione ? const Color(0xFF2E9E4F) : Colors.grey.shade300,
             label: Text(a.esenzione ? 'Con esenzione' : 'Senza esenzione', style: TextStyle(color: a.esenzione ? Colors.white : Colors.black87)))),
           Wrap(spacing: 6, children: [PagatoBadge(a), RimborsoBadge(a)]),
-                  RicettaInfo(a),
-          if (a.status != AppointmentStatus.annullato || a.rimborsoPending) ...[
-            const SizedBox(height: 8),
-            LayoutBuilder(builder: (context, c) {
-              final narrow = c.maxWidth < 480;
-              final shown = a.status == AppointmentStatus.annullato
-                  ? [for (final x in actions) if (x.$1 == 'Segna rimborsato' || x.$1 == 'Correggi dati cliente' || x.$1 == 'WhatsApp') x]
-                  : active
-                  ? actions
-                  : [for (final x in actions) if (x.$1 == 'Correggi dati cliente' || x.$1 == 'Modifica' || x.$1 == 'Ricetta' || x.$1 == 'WhatsApp' || x.$1 == 'Segna rimborsato') x];
-              final btns = [
-                for (final (t, i, col, f) in shown)
-                  SizedBox(
-                    height: 56,
-                    width: narrow ? double.infinity : null,
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(backgroundColor: col, padding: const EdgeInsets.symmetric(horizontal: 16)),
-                      onPressed: f,
-                      icon: Icon(i),
-                      label: Text(t, softWrap: false, style: const TextStyle(fontSize: 18)),
-                    ),
-                  ),
-              ];
-              return narrow
-                  ? Column(children: [for (final b in btns) Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: b)])
-                  : Row(children: [for (final b in btns) Expanded(child: Padding(padding: const EdgeInsets.all(4), child: b))]);
-            }),
+          RicettaInfo(a),
+          if (showSecondary.isNotEmpty || showPrimary.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            if (showSecondary.isNotEmpty)
+              Wrap(spacing: 8, runSpacing: 8, children: [for (final x in showSecondary) secondaryBtn(x)]),
+            if (showSecondary.isNotEmpty && showPrimary.isNotEmpty) const SizedBox(height: 8),
+            if (showPrimary.isNotEmpty)
+              Wrap(spacing: 8, runSpacing: 8, children: [for (final x in showPrimary) primaryBtn(x)]),
           ],
         ]),
       ),
