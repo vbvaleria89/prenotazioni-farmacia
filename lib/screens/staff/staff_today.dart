@@ -173,27 +173,6 @@ class _Tile extends StatelessWidget {
     final showPrimary = a.status == AppointmentStatus.annullato
         ? [for (final x in primary) if (x.$1 == 'Rimborsato' || x.$1 == 'WhatsApp') x]
         : primary;
-    Widget secondaryBtn((String, IconData, VoidCallback) x) => OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Brand.primary,
-            side: BorderSide(color: Brand.primary.withValues(alpha: 0.35)),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            visualDensity: VisualDensity.compact,
-          ),
-          onPressed: x.$3,
-          icon: Icon(x.$2, size: 18),
-          label: Text(x.$1, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-        );
-    Widget primaryBtn((String, IconData, Color, VoidCallback?) x) => FilledButton.icon(
-          style: FilledButton.styleFrom(
-            backgroundColor: x.$3,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            visualDensity: VisualDensity.compact,
-          ),
-          onPressed: x.$4,
-          icon: Icon(x.$2, size: 18),
-          label: Text(x.$1, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-        );
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -213,14 +192,116 @@ class _Tile extends StatelessWidget {
           RicettaInfo(a),
           if (showSecondary.isNotEmpty || showPrimary.isNotEmpty) ...[
             const SizedBox(height: 10),
-            if (showSecondary.isNotEmpty)
-              Wrap(spacing: 8, runSpacing: 8, children: [for (final x in showSecondary) secondaryBtn(x)]),
-            if (showSecondary.isNotEmpty && showPrimary.isNotEmpty) const SizedBox(height: 8),
-            if (showPrimary.isNotEmpty)
-              Wrap(spacing: 8, runSpacing: 8, children: [for (final x in showPrimary) primaryBtn(x)]),
+            _ResponsiveActions(primary: showPrimary, secondary: showSecondary),
           ],
         ]),
       ),
     );
+  }
+}
+
+/// Azioni card: a larghezza piena mostra tutto; restringendo nasconde nel menu ☰.
+class _ResponsiveActions extends StatelessWidget {
+  final List<(String, IconData, Color, VoidCallback?)> primary;
+  final List<(String, IconData, VoidCallback)> secondary;
+  const _ResponsiveActions({required this.primary, required this.secondary});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      final w = c.maxWidth;
+      // <520: secondarie nel menu · <400: resta 1–2 principali + menu
+      final hideSecondary = w < 520;
+      final tight = w < 400;
+      final visiblePrimary = tight
+          ? [
+              for (final x in primary)
+                if (x.$1 == 'Conferma' || x.$1 == 'Pagato' || x.$1 == 'Rimborsato' || x.$1 == 'WhatsApp') x,
+            ].take(2).toList()
+          : primary;
+      final menuPrimary = [
+        for (final x in primary)
+          if (!visiblePrimary.any((v) => v.$1 == x.$1)) x,
+      ];
+      final menuSecondary = hideSecondary ? secondary : const <(String, IconData, VoidCallback)>[];
+      final showSecondaryInline = hideSecondary ? const <(String, IconData, VoidCallback)>[] : secondary;
+      final hasMenu = menuSecondary.isNotEmpty || menuPrimary.isNotEmpty;
+
+      Widget primaryBtn((String, IconData, Color, VoidCallback?) x) => FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: x.$3,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: x.$4,
+            icon: Icon(x.$2, size: 18),
+            label: Text(x.$1, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          );
+      Widget secondaryBtn((String, IconData, VoidCallback) x) => OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Brand.primary,
+              side: BorderSide(color: Brand.primary.withValues(alpha: 0.35)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: x.$3,
+            icon: Icon(x.$2, size: 18),
+            label: Text(x.$1, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          );
+
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (showSecondaryInline.isNotEmpty) ...[
+          Wrap(spacing: 8, runSpacing: 8, children: [for (final x in showSecondaryInline) secondaryBtn(x)]),
+          if (visiblePrimary.isNotEmpty || hasMenu) const SizedBox(height: 8),
+        ],
+        Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          for (final x in visiblePrimary) primaryBtn(x),
+          if (hasMenu)
+            PopupMenuButton<VoidCallback>(
+              tooltip: 'Altre azioni',
+              position: PopupMenuPosition.under,
+              offset: const Offset(0, 8),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              onSelected: (fn) => fn(),
+              itemBuilder: (ctx) => [
+                for (final x in menuPrimary)
+                  if (x.$4 != null)
+                    PopupMenuItem(
+                      value: x.$4,
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(x.$2, color: x.$3),
+                        title: Text(x.$1, style: TextStyle(fontWeight: FontWeight.w600, color: x.$3)),
+                      ),
+                    ),
+                if (menuPrimary.any((x) => x.$4 != null) && menuSecondary.isNotEmpty) const PopupMenuDivider(),
+                for (final x in menuSecondary)
+                  PopupMenuItem(
+                    value: x.$3,
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(x.$2, color: Brand.primary),
+                      title: Text(x.$1, style: const TextStyle(fontWeight: FontWeight.w600, color: Brand.primary)),
+                    ),
+                  ),
+              ],
+              child: Material(
+                color: Brand.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.menu, color: Brand.primary, size: 20),
+                    SizedBox(width: 6),
+                    Text('Altro', style: TextStyle(color: Brand.primary, fontWeight: FontWeight.w700, fontSize: 14)),
+                  ]),
+                ),
+              ),
+            ),
+        ]),
+      ]);
+    });
   }
 }
