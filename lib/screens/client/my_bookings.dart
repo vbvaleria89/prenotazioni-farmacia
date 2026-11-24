@@ -13,6 +13,7 @@ import 'notice_flyer.dart';
 import 'services_home.dart';
 import 'slot_picker.dart' show hhmm;
 import 'reschedule_page.dart';
+import '../staff/ricetta_info.dart';
 
 /// Area personale cliente: hub a tessere.
 class MyBookings extends StatefulWidget {
@@ -331,12 +332,23 @@ class _BookingTile extends StatelessWidget {
             subtitle: Text('$when\nCodice $code · $status${a.pagato ? ' · Pagato' : ''}${a.esenzione ? ' · Con esenzione' : ''}'),
             isThreeLine: true,
           ),
-          if (canCancel)
+          if (a.blocksRoom)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+              child: RicettaInfo(a, showButton: false),
+            ),
+          if (a.blocksRoom)
             Align(
               alignment: Alignment.centerRight,
               child: Padding(
                 padding: const EdgeInsets.only(right: 12),
                 child: Wrap(spacing: 8, children: [
+                OutlinedButton.icon(
+                  onPressed: () => apriRicetta(context, a),
+                  icon: const Icon(Icons.medication_outlined),
+                  label: Text(a.esenzione && ((a.ricettaNumero ?? '').isNotEmpty || a.ricettaFoto) ? 'Modifica ricetta' : 'Ricetta'),
+                ),
+                if (canCancel) ...[
                 OutlinedButton.icon(
                   onPressed: () => apriRiprogramma(context, a),
                   icon: const Icon(Icons.event_repeat),
@@ -348,6 +360,7 @@ class _BookingTile extends StatelessWidget {
                   icon: const Icon(Icons.close),
                   label: const Text('Annulla'),
                 ),
+                ],
                 ]),
               ),
             ),

@@ -17,6 +17,7 @@ import 'staff_notices.dart';
 import 'staff_notifications.dart';
 import 'staff_today.dart';
 import '../../widgets/staff_idle_guard.dart';
+import '../../widgets/gcal_alert_banner.dart';
 import '../../services/auth_persistence.dart';
 
 /// Home staff/admin: griglia di tasti grandi, pensata per il desktop.
@@ -29,6 +30,7 @@ class StaffHub extends StatefulWidget {
 
 class _StaffHubState extends State<StaffHub> {
   Employee? _updatedEmployee;
+  int _gcalCheck = 0;
   @override
   void initState() {
     super.initState();
@@ -90,18 +92,27 @@ class _StaffHubState extends State<StaffHub> {
           ),
         ]),
         const SizedBox(height: 8),
+        if (e.isAdmin) GcalAlertBanner(
+          key: ValueKey(_gcalCheck),
+          onReconnect: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (_) => StaffToday(employee: e)));
+            if (mounted) setState(() => _gcalCheck++);
+          },
+        ),
         Text('Buongiorno', style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Brand.primary, fontWeight: FontWeight.w800)),
         const SizedBox(height: 16),
         LayoutBuilder(builder: (context, c) {
           final cols = c.maxWidth >= 1100 ? 4 : c.maxWidth >= 760 ? 3 : 2;
+          // Mobile (2 colonne): tile più alte + tipografia compatta così i sottotitoli non vengono tagliati.
+          final mobile = cols == 2;
           return GridView.count(
             crossAxisCount: cols,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             mainAxisSpacing: 14,
             crossAxisSpacing: 14,
-            childAspectRatio: cols >= 3 ? 1.45 : 1.15,
-            children: [for (final t in tiles) _HubCard(t)],
+            childAspectRatio: cols >= 3 ? 1.45 : (mobile ? 0.92 : 1.15),
+            children: [for (final t in tiles) _HubCard(t, compact: mobile)],
           );
         }),
       ]),
@@ -123,9 +134,16 @@ Widget _staffBooking() => const ServicesHome(fromStaff: true);
 
 class _HubCard extends StatelessWidget {
   final _HubTile tile;
-  const _HubCard(this.tile);
+  final bool compact;
+  const _HubCard(this.tile, {this.compact = false});
   @override
   Widget build(BuildContext context) {
+    final pad = compact ? 14.0 : 18.0;
+    final iconSize = compact ? 34.0 : 40.0;
+    final titleSize = compact ? 18.0 : 22.0;
+    final subSize = compact ? 13.0 : 15.0;
+    final gapIcon = compact ? 8.0 : 12.0;
+    final gapTitle = compact ? 4.0 : 6.0;
     return Card(
       elevation: 1,
       shadowColor: Brand.primary.withValues(alpha: 0.16),
@@ -134,13 +152,15 @@ class _HubCard extends StatelessWidget {
       child: InkWell(
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => tile.page())),
         child: Padding(
-          padding: const EdgeInsets.all(18),
+          padding: EdgeInsets.all(pad),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-            tile.badge ? const UnreadBadge(child: Icon(Icons.notifications, size: 40, color: Brand.green)) : Icon(tile.icon, size: 40, color: tile.color),
-            const SizedBox(height: 12),
-            Text(tile.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Brand.primary, height: 1.1)),
-            const SizedBox(height: 6),
-            Text(tile.subtitle, style: const TextStyle(fontSize: 15, color: Colors.black54)),
+            tile.badge
+                ? UnreadBadge(child: Icon(Icons.notifications, size: iconSize, color: Brand.green))
+                : Icon(tile.icon, size: iconSize, color: tile.color),
+            SizedBox(height: gapIcon),
+            Text(tile.title, style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w800, color: Brand.primary, height: 1.1)),
+            SizedBox(height: gapTitle),
+            Text(tile.subtitle, style: TextStyle(fontSize: subSize, color: Colors.black54, height: 1.2)),
           ]),
         ),
       ),

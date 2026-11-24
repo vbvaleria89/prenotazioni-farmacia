@@ -25,6 +25,7 @@ class _StaffTodayState extends State<StaffToday> {
   bool _statusLoading = true;
   bool _serverConnected = false;
   String? _connectedEmail;
+  String? _reason;
 
   @override
   void initState() {
@@ -45,6 +46,7 @@ class _StaffTodayState extends State<StaffToday> {
         setState(() {
           _serverConnected = j['connected'] == true;
           _connectedEmail = j['email'] as String?;
+          _reason = j['reason'] as String?;
           _statusLoading = false;
         });
         return;
@@ -90,6 +92,10 @@ class _StaffTodayState extends State<StaffToday> {
         ? 'Verifico il collegamento a Google Calendar…'
         : ok
             ? 'Google Calendar collegato come ${_connectedEmail ?? 'account farmacia'}: le prenotazioni si sincronizzano da sole.'
+            : _reason == 'expired'
+                ? (admin
+                    ? 'Google Calendar scollegato: il collegamento è scaduto o revocato. Premi «Ricollega Google Calendar» e accedi con farmaciasanciro.servizi@gmail.com.'
+                    : 'Google Calendar scollegato: il collegamento è scaduto. Chiedi a un amministratore di ricollegarlo.')
             : admin
                 ? 'Google Calendar non collegato. Premi il pulsante e accedi con farmaciasanciro.servizi@gmail.com.'
                 : 'Google Calendar non collegato. Chiedi a un amministratore di collegarlo una volta sola.';
@@ -105,7 +111,7 @@ class _StaffTodayState extends State<StaffToday> {
             child: FilledButton.icon(
                 onPressed: _busy ? null : _connect,
                 icon: const Icon(Icons.calendar_month),
-                label: Text(ok ? 'Ricollega Google Calendar' : 'Collega Google Calendar', style: const TextStyle(fontSize: 16))),
+                label: Text(ok || _reason == 'expired' ? 'Ricollega Google Calendar' : 'Collega Google Calendar', style: const TextStyle(fontSize: 16))),
           ),
           if (admin || ok) TextButton(onPressed: _statusLoading ? null : _refreshStatus, child: const Text('Aggiorna stato')),
         ]),
@@ -146,17 +152,27 @@ class _Tile extends StatelessWidget {
       try { await f(); } catch (e) { m.showSnackBar(SnackBar(content: Text('Operazione non riuscita: $e'))); }
     }
     final active = a.blocksRoom;
-    final actions = <(String, IconData, Color, VoidCallback?)>[
-      ('Correggi dati cliente', Icons.person_outline, const Color(0xFF32448C), () => apriCorrezioneCliente(context, a)),
-      if (a.status != AppointmentStatus.annullato) ('Modifica', Icons.edit, const Color(0xFF32448C), () => apriModificaPrenotazione(context, a)),
-      if (a.blocksRoom) ('Riprogramma', Icons.event_repeat, const Color(0xFF32448C), () => apriRiprogramma(context, a, asStaff: true)),
-      ('Conferma', Icons.check, Colors.green, a.status == AppointmentStatus.inAttesa ? () => run(() => bookingService.confirm(a)) : null),
-      if (a.blocksRoom) ('Annulla', Icons.close, Colors.red, () => annullaPrenotazione(context, a)),
-      if (a.rimborsoPending) ('Segna rimborsato', Icons.currency_exchange, const Color(0xFF9B2C2C), () => segnaRimborsato(context, a)),
-      ('Libera stanza', Icons.meeting_room, Colors.blue, () => run(() => bookingService.freeRoom(a))),
-      if (!a.pagato) ('Pagato', Icons.euro, const Color(0xFF2E9E4F), () => segnaPagato(context, a)),
-      if (waClienteLink(a) != null) ('WhatsApp', Icons.chat, const Color(0xFF25D366), () => openExternal(waClienteLink(a)!)),
+    // secondarie = dati/organizzazione; principali = stato/pagamento/contatto
+    final secondary = <(String, IconData, VoidCallback)>[
+      ('Cliente', Icons.person_outline, () => apriCorrezioneCliente(context, a)),
+      if (a.status != AppointmentStatus.annullato) ('Modifica', Icons.edit, () => apriModificaPrenotazione(context, a)),
+      if (a.status != AppointmentStatus.annullato) ('Ricetta', Icons.medication_outlined, () => apriRicetta(context, a)),
+      if (a.blocksRoom) ('Riprogramma', Icons.event_repeat, () => apriRiprogramma(context, a, asStaff: true)),
+      if (a.blocksRoom) ('Libera', Icons.meeting_room, () => run(() => bookingService.freeRoom(a))),
     ];
+    final primary = <(String, IconData, Color, VoidCallback?)>[
+      if (a.status == AppointmentStatus.inAttesa) ('Conferma', Icons.check, const Color(0xFF2E9E4F), () => run(() => bookingService.confirm(a))),
+      if (a.blocksRoom) ('Annulla', Icons.close, const Color(0xFFC62828), () => annullaPrenotazione(context, a)),
+      if (a.rimborsoPending) ('Rimborsato', Icons.currency_exchange, const Color(0xFF9B2C2C), () => segnaRimborsato(context, a)),
+      if (!a.pagato && a.status != AppointmentStatus.annullato) ('Pagato', Icons.euro, const Color(0xFF2E9E4F), () => segnaPagato(context, a)),
+      if (waClienteLink(a) != null) ('WhatsApp', Icons.chat, const Color(0xFF1B7A3D), () => openExternal(waClienteLink(a)!)),
+    ];
+    final showSecondary = a.status != AppointmentStatus.annullato
+        ? (active ? secondary : [for (final x in secondary) if (x.$1 != 'Riprogramma' && x.$1 != 'Libera') x])
+        : [for (final x in secondary) if (x.$1 == 'Cliente') x];
+    final showPrimary = a.status == AppointmentStatus.annullato
+        ? [for (final x in primary) if (x.$1 == 'Rimborsato' || x.$1 == 'WhatsApp') x]
+        : primary;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -173,36 +189,119 @@ class _Tile extends StatelessWidget {
             backgroundColor: a.esenzione ? const Color(0xFF2E9E4F) : Colors.grey.shade300,
             label: Text(a.esenzione ? 'Con esenzione' : 'Senza esenzione', style: TextStyle(color: a.esenzione ? Colors.white : Colors.black87)))),
           Wrap(spacing: 6, children: [PagatoBadge(a), RimborsoBadge(a)]),
-                  RicettaInfo(a),
-          if (a.status != AppointmentStatus.annullato || a.rimborsoPending) ...[
-            const SizedBox(height: 8),
-            LayoutBuilder(builder: (context, c) {
-              final narrow = c.maxWidth < 480;
-              final shown = a.status == AppointmentStatus.annullato
-                  ? [for (final x in actions) if (x.$1 == 'Segna rimborsato' || x.$1 == 'Correggi dati cliente' || x.$1 == 'WhatsApp') x]
-                  : active
-                  ? actions
-                  : [for (final x in actions) if (x.$1 == 'Correggi dati cliente' || x.$1 == 'Modifica' || x.$1 == 'WhatsApp' || x.$1 == 'Segna rimborsato') x];
-              final btns = [
-                for (final (t, i, col, f) in shown)
-                  SizedBox(
-                    height: 56,
-                    width: narrow ? double.infinity : null,
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(backgroundColor: col, padding: const EdgeInsets.symmetric(horizontal: 16)),
-                      onPressed: f,
-                      icon: Icon(i),
-                      label: Text(t, softWrap: false, style: const TextStyle(fontSize: 18)),
-                    ),
-                  ),
-              ];
-              return narrow
-                  ? Column(children: [for (final b in btns) Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: b)])
-                  : Row(children: [for (final b in btns) Expanded(child: Padding(padding: const EdgeInsets.all(4), child: b))]);
-            }),
+          RicettaInfo(a),
+          if (showSecondary.isNotEmpty || showPrimary.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _ResponsiveActions(primary: showPrimary, secondary: showSecondary),
           ],
         ]),
       ),
     );
+  }
+}
+
+/// Azioni card: a larghezza piena mostra tutto; restringendo nasconde nel menu ☰.
+class _ResponsiveActions extends StatelessWidget {
+  final List<(String, IconData, Color, VoidCallback?)> primary;
+  final List<(String, IconData, VoidCallback)> secondary;
+  const _ResponsiveActions({required this.primary, required this.secondary});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      final w = c.maxWidth;
+      // <520: secondarie nel menu · <400: resta 1–2 principali + menu
+      final hideSecondary = w < 520;
+      final tight = w < 400;
+      final visiblePrimary = tight
+          ? [
+              for (final x in primary)
+                if (x.$1 == 'Conferma' || x.$1 == 'Pagato' || x.$1 == 'Rimborsato' || x.$1 == 'WhatsApp') x,
+            ].take(2).toList()
+          : primary;
+      final menuPrimary = [
+        for (final x in primary)
+          if (!visiblePrimary.any((v) => v.$1 == x.$1)) x,
+      ];
+      final menuSecondary = hideSecondary ? secondary : const <(String, IconData, VoidCallback)>[];
+      final showSecondaryInline = hideSecondary ? const <(String, IconData, VoidCallback)>[] : secondary;
+      final hasMenu = menuSecondary.isNotEmpty || menuPrimary.isNotEmpty;
+
+      Widget primaryBtn((String, IconData, Color, VoidCallback?) x) => FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: x.$3,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: x.$4,
+            icon: Icon(x.$2, size: 18),
+            label: Text(x.$1, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          );
+      Widget secondaryBtn((String, IconData, VoidCallback) x) => OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Brand.primary,
+              side: BorderSide(color: Brand.primary.withValues(alpha: 0.35)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: x.$3,
+            icon: Icon(x.$2, size: 18),
+            label: Text(x.$1, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          );
+
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (showSecondaryInline.isNotEmpty) ...[
+          Wrap(spacing: 8, runSpacing: 8, children: [for (final x in showSecondaryInline) secondaryBtn(x)]),
+          if (visiblePrimary.isNotEmpty || hasMenu) const SizedBox(height: 8),
+        ],
+        Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          for (final x in visiblePrimary) primaryBtn(x),
+          if (hasMenu)
+            PopupMenuButton<VoidCallback>(
+              tooltip: 'Altre azioni',
+              position: PopupMenuPosition.under,
+              offset: const Offset(0, 8),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              onSelected: (fn) => fn(),
+              itemBuilder: (ctx) => [
+                for (final x in menuPrimary)
+                  if (x.$4 != null)
+                    PopupMenuItem(
+                      value: x.$4,
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(x.$2, color: x.$3),
+                        title: Text(x.$1, style: TextStyle(fontWeight: FontWeight.w600, color: x.$3)),
+                      ),
+                    ),
+                if (menuPrimary.any((x) => x.$4 != null) && menuSecondary.isNotEmpty) const PopupMenuDivider(),
+                for (final x in menuSecondary)
+                  PopupMenuItem(
+                    value: x.$3,
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(x.$2, color: Brand.primary),
+                      title: Text(x.$1, style: const TextStyle(fontWeight: FontWeight.w600, color: Brand.primary)),
+                    ),
+                  ),
+              ],
+              child: Material(
+                color: Brand.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.menu, color: Brand.primary, size: 20),
+                    SizedBox(width: 6),
+                    Text('Altro', style: TextStyle(color: Brand.primary, fontWeight: FontWeight.w700, fontSize: 14)),
+                  ]),
+                ),
+              ),
+            ),
+        ]),
+      ]);
+    });
   }
 }

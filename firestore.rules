@@ -71,8 +71,10 @@ service cloud.firestore {
         && request.resource.data.email is string && request.resource.data.email.size() < 120
         && request.resource.data.nome is string && request.resource.data.nome.size() < 100
         && request.resource.data.telefono is string && request.resource.data.telefono.size() < 30
-        && request.resource.data.codiceFiscale is string
-        && request.resource.data.codiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$');
+        && (!('codiceFiscale' in request.resource.data)
+            || request.resource.data.codiceFiscale == ''
+            || (request.resource.data.codiceFiscale is string
+                && request.resource.data.codiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$')));
       // Il banco corregge soltanto i contatti di un profilo esistente, non password o identità.
       allow update: if isActiveEmployee()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'nome', 'telefono', 'updatedAt'])
@@ -82,8 +84,16 @@ service cloud.firestore {
     }
     match /roomDays/{d} { allow read, write: if signedIn(); }
     match /ricette/{id} {
+      function ownsAppointment() {
+        return exists(/databases/$(db)/documents/appointments/$(id))
+          && (get(/databases/$(db)/documents/appointments/$(id)).data.get('clienteUid', '') == request.auth.uid
+              || get(/databases/$(db)/documents/appointments/$(id)).data.get('createdBy', '') == request.auth.uid);
+      }
       allow read: if isEmployee();
-      allow create: if signedIn() && request.resource.data.foto is string && request.resource.data.foto.size() < 900000;
+      allow create: if signedIn() && request.resource.data.foto is string && request.resource.data.foto.size() < 900000
+        && (isActiveEmployee() || ownsAppointment());
+      allow update: if signedIn() && request.resource.data.foto is string && request.resource.data.foto.size() < 900000
+        && (isActiveEmployee() || ownsAppointment());
       allow delete: if isAdmin();
     }
     // Notifiche staff: create insieme all'appuntamento (stesso id) oppure rimborso (rimborso_{id}).
@@ -163,12 +173,32 @@ service cloud.firestore {
         && (request.resource.data.get('pagato', false) == false || isEmployee())
         && request.resource.data.clienteNome is string && request.resource.data.clienteNome.size() < 100
         && request.resource.data.clienteTel is string && request.resource.data.clienteTel.size() < 30
-        && request.resource.data.clienteCodiceFiscale is string
-        && request.resource.data.clienteCodiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$')
-        && (request.resource.data.get('esenzione', false) == false || (request.resource.data.ricettaNumero is string && request.resource.data.ricettaNumero.size() > 0 && request.resource.data.ricettaNumero.size() < 60))
+        && (!('clienteCodiceFiscale' in request.resource.data)
+            || request.resource.data.clienteCodiceFiscale == null
+            || request.resource.data.clienteCodiceFiscale == ''
+            || (request.resource.data.clienteCodiceFiscale is string
+                && request.resource.data.clienteCodiceFiscale.matches('^[A-Z]{6}[0-9LMNPQRSTUV]{2}[ABCDEHLMPRST][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$')))
+        && (!('ricettaNumero' in request.resource.data)
+            || request.resource.data.ricettaNumero == null
+            || (request.resource.data.ricettaNumero is string && request.resource.data.ricettaNumero.size() > 0 && request.resource.data.ricettaNumero.size() < 60))
         && (!('clienteUid' in request.resource.data) || request.resource.data.clienteUid == request.auth.uid)
         && !request.resource.data.keys().hasAny(['clienteAccount', 'accountLinkedAt', 'receiptSentAt']);
       allow update: if isEmployee();
+      // Cliente/staff creatore: inserisci o aggiorna ricetta in un secondo momento.
+      allow update: if signedIn()
+        && (resource.data.createdBy == request.auth.uid || resource.data.clienteUid == request.auth.uid)
+        && resource.data.status in ['inAttesa', 'confermato']
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['esenzione', 'ricettaNumero', 'ricettaNote', 'ricettaFoto', 'updatedBy', 'updatedAt'])
+        && request.resource.data.esenzione is bool
+        && (!('ricettaNumero' in request.resource.data)
+            || request.resource.data.ricettaNumero == null
+            || (request.resource.data.ricettaNumero is string && request.resource.data.ricettaNumero.size() > 0 && request.resource.data.ricettaNumero.size() < 60))
+        && (!('ricettaNote' in request.resource.data)
+            || request.resource.data.ricettaNote == null
+            || (request.resource.data.ricettaNote is string && request.resource.data.ricettaNote.size() < 500))
+        && request.resource.data.ricettaFoto is bool;
       // Cliente: sync calendarEventId dopo create, oppure annullamento proprio entro regole app (24h lato client).
       allow update: if signedIn()
         && (resource.data.createdBy == request.auth.uid || resource.data.clienteUid == request.auth.uid)

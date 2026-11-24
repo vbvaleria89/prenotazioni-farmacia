@@ -19,6 +19,24 @@ export const GCAL_SCOPE = [
   'email',
 ].join(' ');
 export const SECRETS_PATH = 'serverSecrets/gcal';
+// Google Calendar event colors: solo ID 1–11 (niente hex custom).
+// 1 Lavanda · default se il servizio non ha colore configurato.
+export const EVENT_COLOR_ID = '1';
+export const GCAL_COLOR_IDS = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']);
+/** Hex UI allineati a `lib/models/service_colors.dart`. */
+export const GCAL_COLOR_HEX = {
+  '1': '#A4BDFC',
+  '2': '#7AE7BF',
+  '3': '#DBADFF',
+  '4': '#FF887C',
+  '5': '#FBD75B',
+  '6': '#FFB878',
+  '7': '#46D6DB',
+  '8': '#E1E1E1',
+  '9': '#5484ED',
+  '10': '#51B749',
+  '11': '#DC2127',
+};
 export const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 export const CALENDAR_API = 'https://www.googleapis.com/calendar/v3';
 export const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
@@ -107,8 +125,27 @@ export function paymentLabel(data) {
   return 'Pagato';
 }
 
+/** colorId Google Calendar (1–11); null se assente/non valido. */
+export function parseGcalColorId(raw) {
+  const id = String(raw ?? '').trim();
+  return GCAL_COLOR_IDS.has(id) ? id : null;
+}
+
+const GCAL_COLOR_LIST = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'];
+
+/** Default stabile allineato a `defaultServiceColorFor` in Flutter. */
+export function defaultGcalColorIdFor(serviceId, ordine = 0) {
+  const n = GCAL_COLOR_LIST.length;
+  const ord = Number(ordine) || 0;
+  if (ord > 0) return GCAL_COLOR_LIST[(ord - 1) % n];
+  let h = 0;
+  const s = String(serviceId || '');
+  for (let i = 0; i < s.length; i++) h = (h + s.charCodeAt(i)) % n;
+  return GCAL_COLOR_LIST[h];
+}
+
 /** Titolo e descrizione allineati a GoogleCalendarService. */
-export function eventFromAppointment(id, data) {
+export function eventFromAppointment(id, data, opts = {}) {
   const service = plain(data?.servizioNome || data?.servizio, 120) || 'Prenotazione';
   const stanza = stanzaLabel(data);
   const operator = plain(data?.employeeNome, 100);
@@ -134,12 +171,193 @@ export function eventFromAppointment(id, data) {
   lines.push(`Codice: ${code}`);
   const start = toDate(data?.start);
   const end = toDate(data?.end);
+  const colorId = parseGcalColorId(opts.colorId)
+    || parseGcalColorId(data?.gcalColorId)
+    || EVENT_COLOR_ID;
   return {
     summary,
     description: lines.join('\n'),
     start: start ? start.toISOString() : null,
     end: end ? end.toISOString() : null,
+    colorId,
   };
+}
+
+export function hexForGcalColorId(id) {
+  const cid = parseGcalColorId(id) || EVENT_COLOR_ID;
+  return GCAL_COLOR_HEX[cid] || GCAL_COLOR_HEX[EVENT_COLOR_ID];
+}
+
+export function normalizeServiceKey(name) {
+  return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Nome servizio da descrizione (`Servizio: …`) o dal titolo `Cliente · Servizio`. */
+export function serviceNameFromEvent(ev) {
+  const desc = String(ev?.description || '');
+  const m = desc.match(/Servizio:\s*(.+?)(?:\n|$)/i);
+  if (m) return plain(m[1], 120);
+  const summary = String(ev?.summary || '');
+  const sep = ' · ';
+  const i = summary.indexOf(sep);
+  if (i >= 0) return plain(summary.slice(i + sep.length), 120);
+  return '';
+}
+
+export function addColorVote(votes, key, colorId) {
+  const cid = parseGcalColorId(colorId);
+  const k = String(key || '').trim();
+  if (!k || !cid) return;
+  if (!votes.has(k)) votes.set(k, new Map());
+  const m = votes.get(k);
+  m.set(cid, (m.get(cid) || 0) + 1);
+}
+
+export function majorityFromVotes(votes) {
+  const out = new Map();
+  for (const [key, counts] of votes) {
+    let best = null;
+    let bestN = -1;
+    let total = 0;
+    for (const [cid, n] of counts) {
+      total += n;
+      if (n > bestN || (n === bestN && Number(cid) < Number(best))) {
+        best = cid;
+        bestN = n;
+      }
+    }
+    if (best) out.set(key, { colorId: best, votes: bestN, total });
+  }
+  return out;
+}
+
+export async function listCalendarEvents({
+  accessToken, calendarId, fetchImpl, timeMin, timeMax, maxPages = 10,
+}) {
+  const encCal = encodeURIComponent(calendarId);
+  let pageToken = '';
+  const items = [];
+  for (let page = 0; page < maxPages; page++) {
+    const q = new URLSearchParams({
+      singleEvents: 'true',
+      orderBy: 'startTime',
+      maxResults: '250',
+      fields: 'items(id,summary,description,colorId),nextPageToken',
+    });
+    if (timeMin) q.set('timeMin', timeMin);
+    if (timeMax) q.set('timeMax', timeMax);
+    if (pageToken) q.set('pageToken', pageToken);
+    const r = await calendarFetch(accessToken, 'GET', `/calendars/${encCal}/events?${q}`, undefined, fetchImpl);
+    if (!r.ok) throw googleHttpError(r);
+    items.push(...(r.body?.items || []));
+    pageToken = r.body?.nextPageToken || '';
+    if (!pageToken) break;
+  }
+  return items;
+}
+
+/**
+ * Import una tantum: legge i colorId degli eventi Google e li scrive sui servizi Firestore.
+ * Maggioranza per servizio (match via calendarEventId → appointment, oppure nome servizio).
+ */
+export async function importServiceColorsFromGoogle({
+  db, accessToken, calendarId, fetchImpl,
+  now = new Date(), lookbackDays = 120, lookaheadDays = 90,
+}) {
+  const from = new Date(now.getTime() - lookbackDays * 86400000);
+  const to = new Date(now.getTime() + lookaheadDays * 86400000);
+  const events = await listCalendarEvents({
+    accessToken, calendarId, fetchImpl,
+    timeMin: from.toISOString(), timeMax: to.toISOString(),
+  });
+  const byEventId = new Map();
+  for (const ev of events) {
+    if (ev?.id && parseGcalColorId(ev.colorId)) byEventId.set(String(ev.id), ev);
+  }
+
+  const svcSnap = await db.collection('services').get();
+  const services = svcSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const byId = new Map(services.map((s) => [s.id, s]));
+  const byName = new Map();
+  for (const s of services) {
+    const k = normalizeServiceKey(s.nome || s.id);
+    if (k && !byName.has(k)) byName.set(k, s);
+  }
+
+  const votesByServiceId = new Map();
+  const apptSnap = await db.collection('appointments').where('start', '>=', from).limit(500).get();
+  for (const doc of apptSnap.docs) {
+    const data = doc.data() || {};
+    const sid = plain(data.servizio, 80);
+    const eid = data.calendarEventId ? String(data.calendarEventId) : '';
+    const ev = eid ? byEventId.get(eid) : null;
+    if (sid && byId.has(sid) && ev) addColorVote(votesByServiceId, sid, ev.colorId);
+  }
+
+  for (const ev of byEventId.values()) {
+    const name = serviceNameFromEvent(ev);
+    const s = byName.get(normalizeServiceKey(name));
+    if (s) addColorVote(votesByServiceId, s.id, ev.colorId);
+  }
+
+  const winners = majorityFromVotes(votesByServiceId);
+  const updated = [];
+  const skipped = [];
+  for (const s of services) {
+    const win = winners.get(s.id);
+    if (!win) {
+      skipped.push({ id: s.id, nome: s.nome || s.id, reason: 'no_events' });
+      continue;
+    }
+    const hex = hexForGcalColorId(win.colorId);
+    const prev = parseGcalColorId(s.gcalColorId);
+    const sameHex = String(s.colore || '').trim().toUpperCase() === hex;
+    if (prev === win.colorId && sameHex) {
+      skipped.push({
+        id: s.id, nome: s.nome || s.id, reason: 'unchanged',
+        colorId: win.colorId, votes: win.votes, total: win.total,
+      });
+      continue;
+    }
+    await db.doc(`services/${s.id}`).set({
+      gcalColorId: win.colorId,
+      colore: hex,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    updated.push({
+      id: s.id,
+      nome: s.nome || s.id,
+      colorId: win.colorId,
+      colore: hex,
+      from: prev,
+      votes: win.votes,
+      total: win.total,
+    });
+  }
+
+  return {
+    scannedEvents: events.length,
+    coloredEvents: byEventId.size,
+    updated,
+    skipped,
+  };
+}
+
+/** Colore dal servizio Firestore (`services/{servizio}.gcalColorId`), con fallback. */
+export async function loadServiceColorId(db, data) {
+  const fromAppt = parseGcalColorId(data?.gcalColorId);
+  if (fromAppt) return fromAppt;
+  const sid = plain(data?.servizio, 80);
+  if (!sid) return EVENT_COLOR_ID;
+  if (!db) return defaultGcalColorIdFor(sid);
+  try {
+    const snap = await db.doc(`services/${sid}`).get();
+    if (!snap.exists) return defaultGcalColorIdFor(sid);
+    const s = snap.data() || {};
+    return parseGcalColorId(s.gcalColorId) || defaultGcalColorIdFor(sid, s.ordine);
+  } catch {
+    return defaultGcalColorIdFor(sid);
+  }
 }
 
 export function shouldHaveEvent(data) {
@@ -253,6 +471,29 @@ async function accessTokenFromSecret(secret, config, fetchImpl) {
   return { accessToken: data.access_token, rotatedRefresh: next };
 }
 
+// Google risponde invalid_grant quando il refresh token è scaduto (app OAuth in «Testing»: 7 giorni)
+// o revocato. Lo segno su Firestore così l'app può avvisare gli admin di ricollegare.
+export function isRevokedTokenError(e) {
+  return String(e?.message || '') === 'invalid_grant';
+}
+
+async function markTokenProblem(db, e) {
+  if (!isRevokedTokenError(e)) return;
+  try {
+    await db.doc(SECRETS_PATH).set({
+      tokenError: 'expired_or_revoked',
+      tokenErrorAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch { /* best effort */ }
+}
+
+async function clearTokenProblem(db, secret) {
+  if (!secret?.tokenError) return;
+  try {
+    await db.doc(SECRETS_PATH).set({ tokenError: FieldValue.delete(), tokenErrorAt: FieldValue.delete() }, { merge: true });
+  } catch { /* best effort */ }
+}
+
 async function persistRotated(db, rotatedRefresh) {
   if (!rotatedRefresh) return;
   await db.doc(SECRETS_PATH).set({
@@ -261,10 +502,16 @@ async function persistRotated(db, rotatedRefresh) {
   }, { merge: true });
 }
 
-export async function upsertCalendarEvent({ data, id, eventId, accessToken, calendarId, fetchImpl }) {
-  const ev = eventFromAppointment(id, data);
+export async function upsertCalendarEvent({ data, id, eventId, accessToken, calendarId, fetchImpl, colorId }) {
+  const ev = eventFromAppointment(id, data, { colorId });
   if (!ev.start || !ev.end) throw new Error('missing_dates');
-  const body = { summary: ev.summary, description: ev.description, start: { dateTime: ev.start }, end: { dateTime: ev.end } };
+  const body = {
+    summary: ev.summary,
+    description: ev.description,
+    start: { dateTime: ev.start },
+    end: { dateTime: ev.end },
+    colorId: ev.colorId || EVENT_COLOR_ID,
+  };
   const encCal = encodeURIComponent(calendarId);
   const path = `/calendars/${encCal}/events`;
   if (eventId && !String(eventId).startsWith('mock-')) {
@@ -298,7 +545,10 @@ export async function syncAppointmentRecord({ db, data, id, accessToken, calenda
     await db.doc(`appointments/${id}`).update({ calendarEventId: FieldValue.delete() });
     return { action: 'deleted' };
   }
-  const evId = await upsertCalendarEvent({ data, id, eventId: currentId, accessToken, calendarId, fetchImpl });
+  const colorId = await loadServiceColorId(db, data);
+  const evId = await upsertCalendarEvent({
+    data, id, eventId: currentId, accessToken, calendarId, fetchImpl, colorId,
+  });
   if (evId !== currentId) await db.doc(`appointments/${id}`).update({ calendarEventId: evId });
   return { action: currentId && evId === currentId ? 'updated' : 'created', calendarEventId: evId };
 }
@@ -334,11 +584,13 @@ export async function handleGcalSync(req, deps = {}) {
   let tokens;
   try { tokens = await accessTokenFromSecret(secret, config, fetchImpl); }
   catch (e) {
-    console.error(JSON.stringify({ event: 'gcal_token_failed', status: e.status || 0 }));
-    return json({ error: 'not_connected' }, 503);
+    console.error(JSON.stringify({ event: 'gcal_token_failed', status: e.status || 0, code: e.message }));
+    await markTokenProblem(sdk.db, e);
+    return json({ error: isRevokedTokenError(e) ? 'token_expired' : 'not_connected' }, 503);
   }
   if (tokens.error) return json({ error: 'not_connected' }, 503);
   await persistRotated(sdk.db, tokens.rotatedRefresh);
+  await clearTokenProblem(sdk.db, secret);
   try {
     const result = await syncAppointmentRecord({
       db: sdk.db, data, id, accessToken: tokens.accessToken,
@@ -349,6 +601,49 @@ export async function handleGcalSync(req, deps = {}) {
     console.error(JSON.stringify({ event: 'gcal_sync_failed', status: e.status || 0, code: e.message }));
     return json({ error: 'sync_failed' }, 502);
   }
+}
+
+/**
+ * Allinea eventi Google ai colori dei servizi (e al resto del payload sync).
+ * [serviceId] opzionale: solo prenotazioni di quel servizio.
+ */
+export async function pushServiceColorsToGoogle({
+  db, accessToken, calendarId, fetchImpl,
+  serviceId = null,
+  now = new Date(),
+  lookbackDays = 120,
+  limit = 500,
+}) {
+  const from = new Date(now.getTime() - lookbackDays * 86400000);
+  const snap = await db.collection('appointments').where('start', '>=', from).limit(limit).get();
+  const want = serviceId ? plain(serviceId, 80) : '';
+  const summary = {
+    scanned: 0, created: 0, updated: 0, deleted: 0, skipped: 0, failed: 0,
+    serviceId: want || null,
+  };
+  for (const doc of snap.docs) {
+    const data = doc.data() || {};
+    if (want && plain(data.servizio, 80) !== want) continue;
+    summary.scanned++;
+    try {
+      const r = await syncAppointmentRecord({
+        db, data, id: doc.id, accessToken, calendarId, fetchImpl,
+      });
+      if (r.action === 'created') summary.created++;
+      else if (r.action === 'updated') summary.updated++;
+      else if (r.action === 'deleted') summary.deleted++;
+      else if (r.action === 'skipped') summary.skipped++;
+    } catch (e) {
+      summary.failed++;
+      console.error(JSON.stringify({
+        event: 'gcal_push_colors_item_failed',
+        appointmentId: doc.id,
+        status: e.status || 0,
+        message: e.googleMessage || e.message || null,
+      }));
+    }
+  }
+  return summary;
 }
 
 export async function reconcileAppointments({ db, accessToken, calendarId, fetchImpl, now = new Date(), lookbackDays = 14, limit = 80 }) {
@@ -399,9 +694,14 @@ export async function handleGcalReconcile(req, deps = {}) {
   const secret = await readSecret(sdk.db);
   let tokens;
   try { tokens = await accessTokenFromSecret(secret, config, fetchImpl); }
-  catch { return json({ error: 'not_connected' }, 503); }
+  catch (e) {
+    console.error(JSON.stringify({ event: 'gcal_reconcile_token_failed', status: e.status || 0, code: e.message }));
+    await markTokenProblem(sdk.db, e);
+    return json({ error: isRevokedTokenError(e) ? 'token_expired' : 'not_connected' }, 503);
+  }
   if (tokens.error) return json({ error: 'not_connected' }, 503);
   await persistRotated(sdk.db, tokens.rotatedRefresh);
+  await clearTokenProblem(sdk.db, secret);
   const result = await reconcileAppointments({
     db: sdk.db, accessToken: tokens.accessToken, calendarId: config.calendarId, fetchImpl,
   });
@@ -421,11 +721,31 @@ export async function handleGcalStatus(req, deps = {}) {
   const emp = await sdk.db.doc(`employees/${user.uid}`).get();
   if (!emp.exists || emp.data()?.attivo === false) return json({ error: 'forbidden' }, 403);
   const secret = await readSecret(sdk.db);
-  const connected = Boolean(String(secret.refreshToken || '').trim());
+  const hasToken = Boolean(String(secret.refreshToken || '').trim());
+  let expired = hasToken && Boolean(secret.tokenError);
+  const config = calendarConfig(env);
+  // Controllo «vivo»: provo davvero il refresh, così lo stato non resta «collegato» con un token scaduto.
+  if (hasToken && config.clientSecret) {
+    const fetchImpl = deps.fetch ?? fetch;
+    try {
+      const tokens = await accessTokenFromSecret(secret, config, fetchImpl);
+      await persistRotated(sdk.db, tokens.rotatedRefresh);
+      await clearTokenProblem(sdk.db, secret);
+      expired = false;
+    } catch (e) {
+      if (isRevokedTokenError(e)) {
+        expired = true;
+        await markTokenProblem(sdk.db, e);
+      }
+      // errori di rete/transitori: tengo l'ultimo stato noto
+    }
+  }
+  const connected = hasToken && !expired;
   return json({
     ok: true,
     connected,
-    email: connected ? (secret.email || calendarConfig(env).expectedEmail) : null,
+    reason: connected ? null : (expired ? 'expired' : 'not_connected'),
+    email: hasToken ? (secret.email || config.expectedEmail) : null,
     connectedAt: secret.connectedAt?.toDate?.()?.toISOString?.() || null,
     isAdmin: emp.data()?.ruolo === 'admin',
   });
@@ -455,6 +775,106 @@ export async function handleGcalOauthStart(req, deps = {}) {
   }, { merge: true });
   const url = authorizationUrl({ clientId: config.clientId, redirectUri: config.redirectUri, state });
   return json({ ok: true, url });
+}
+
+/** Admin: import una tantum colori servizio da eventi Google Calendar → Firestore. */
+export async function handleGcalImportColors(req, deps = {}) {
+  if (req.method === 'OPTIONS') return new Response('', { headers: CORS });
+  if (req.method !== 'POST') return json({ error: 'method' }, 405);
+  const token = bearer(req);
+  if (!token) return json({ error: 'unauthorized' }, 401);
+  const env = deps.env ?? readEnv;
+  const sdk = deps.services ?? firebaseServices(env);
+  if (!sdk) return json({ error: 'not_configured' }, 503);
+  let user;
+  try { user = await sdk.auth.verifyIdToken(token); } catch { return json({ error: 'unauthorized' }, 401); }
+  const me = await sdk.db.doc(`employees/${user.uid}`).get();
+  if (!me.exists || me.data()?.ruolo !== 'admin' || me.data()?.attivo === false) {
+    return json({ error: 'forbidden' }, 403);
+  }
+  const config = calendarConfig(env);
+  if (!config.clientSecret) return json({ error: 'not_configured' }, 503);
+  const fetchImpl = deps.fetch ?? fetch;
+  const secret = await readSecret(sdk.db);
+  let tokens;
+  try { tokens = await accessTokenFromSecret(secret, config, fetchImpl); }
+  catch (e) {
+    console.error(JSON.stringify({ event: 'gcal_import_colors_token_failed', status: e.status || 0, code: e.message }));
+    await markTokenProblem(sdk.db, e);
+    return json({ error: isRevokedTokenError(e) ? 'token_expired' : 'not_connected' }, 503);
+  }
+  if (tokens.error) return json({ error: 'not_connected' }, 503);
+  await persistRotated(sdk.db, tokens.rotatedRefresh);
+  await clearTokenProblem(sdk.db, secret);
+  try {
+    const result = await importServiceColorsFromGoogle({
+      db: sdk.db,
+      accessToken: tokens.accessToken,
+      calendarId: config.calendarId,
+      fetchImpl,
+    });
+    return json({ ok: true, ...result });
+  } catch (e) {
+    console.error(JSON.stringify({
+      event: 'gcal_import_colors_failed',
+      status: e.status || 0,
+      code: e.message,
+      reason: e.reason || null,
+    }));
+    return json({ error: 'import_failed' }, 502);
+  }
+}
+
+/** Admin: spinge i colori dei servizi (app → Google) sulle prenotazioni attive. */
+export async function handleGcalPushColors(req, deps = {}) {
+  if (req.method === 'OPTIONS') return new Response('', { headers: CORS });
+  if (req.method !== 'POST') return json({ error: 'method' }, 405);
+  const token = bearer(req);
+  if (!token) return json({ error: 'unauthorized' }, 401);
+  const env = deps.env ?? readEnv;
+  const sdk = deps.services ?? firebaseServices(env);
+  if (!sdk) return json({ error: 'not_configured' }, 503);
+  let user;
+  try { user = await sdk.auth.verifyIdToken(token); } catch { return json({ error: 'unauthorized' }, 401); }
+  const me = await sdk.db.doc(`employees/${user.uid}`).get();
+  if (!me.exists || me.data()?.ruolo !== 'admin' || me.data()?.attivo === false) {
+    return json({ error: 'forbidden' }, 403);
+  }
+  const config = calendarConfig(env);
+  if (!config.clientSecret) return json({ error: 'not_configured' }, 503);
+  let body = {};
+  try { body = await req.json(); } catch { /* body opzionale */ }
+  const serviceId = typeof body?.serviceId === 'string' ? plain(body.serviceId, 80) : '';
+  const fetchImpl = deps.fetch ?? fetch;
+  const secret = await readSecret(sdk.db);
+  let tokens;
+  try { tokens = await accessTokenFromSecret(secret, config, fetchImpl); }
+  catch (e) {
+    console.error(JSON.stringify({ event: 'gcal_push_colors_token_failed', status: e.status || 0, code: e.message }));
+    await markTokenProblem(sdk.db, e);
+    return json({ error: isRevokedTokenError(e) ? 'token_expired' : 'not_connected' }, 503);
+  }
+  if (tokens.error) return json({ error: 'not_connected' }, 503);
+  await persistRotated(sdk.db, tokens.rotatedRefresh);
+  await clearTokenProblem(sdk.db, secret);
+  try {
+    const result = await pushServiceColorsToGoogle({
+      db: sdk.db,
+      accessToken: tokens.accessToken,
+      calendarId: config.calendarId,
+      fetchImpl,
+      serviceId: serviceId || null,
+    });
+    return json({ ok: true, ...result });
+  } catch (e) {
+    console.error(JSON.stringify({
+      event: 'gcal_push_colors_failed',
+      status: e.status || 0,
+      code: e.message,
+      reason: e.reason || null,
+    }));
+    return json({ error: 'push_failed' }, 502);
+  }
 }
 
 function htmlPage(title, body, status = 200) {
@@ -514,6 +934,8 @@ export async function handleGcalOauthCallback(req, deps = {}) {
     connectedAt: FieldValue.serverTimestamp(),
     connectedBy: pending.uid || null,
     pendingOauth: FieldValue.delete(),
+    tokenError: FieldValue.delete(),
+    tokenErrorAt: FieldValue.delete(),
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
   try {

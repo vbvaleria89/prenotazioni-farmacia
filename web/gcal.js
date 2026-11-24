@@ -23,9 +23,13 @@
       tc.requestAccessToken({prompt:''});
     }),
     disconnect:()=>{const t=tok();if(t&&window.google)google.accounts.oauth2.revoke(t,()=>{});sessionStorage.removeItem('gcal_tok');},
-    createEvent:async(summary,description,startIso,endIso)=>JSON.parse(await call('POST','/calendars/'+encodeURIComponent(CAL_ID)+'/events',{summary,description,start:{dateTime:startIso},end:{dateTime:endIso}})).id,
-    updateEvent:async(id,summary,description,startIso,endIso)=>{
-      const body={summary,description,start:{dateTime:startIso},end:{dateTime:endIso}};
+    createEvent:async(summary,description,startIso,endIso,colorId)=>{
+      const c=String(colorId||'1');
+      return JSON.parse(await call('POST','/calendars/'+encodeURIComponent(CAL_ID)+'/events',{summary,description,start:{dateTime:startIso},end:{dateTime:endIso},colorId:/^(?:[1-9]|1[01])$/.test(c)?c:'1'})).id;
+    },
+    updateEvent:async(id,summary,description,startIso,endIso,colorId)=>{
+      const c=String(colorId||'1');
+      const body={summary,description,start:{dateTime:startIso},end:{dateTime:endIso},colorId:/^(?:[1-9]|1[01])$/.test(c)?c:'1'};
       const path='/calendars/'+encodeURIComponent(CAL_ID)+'/events';
       try { return JSON.parse(await call('PATCH',path+'/'+encodeURIComponent(id),body)).id; }
       catch(e) {

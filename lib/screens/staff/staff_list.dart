@@ -146,6 +146,8 @@ class _StaffBookingListState extends State<StaffBookingList> {
           IconButton(tooltip: 'Correggi dati cliente', onPressed: () => apriCorrezioneCliente(context, a), icon: const Icon(Icons.person_outline, color: Brand.primary)),
         if (a.status != AppointmentStatus.annullato)
           IconButton(tooltip: 'Modifica', onPressed: () => apriModificaPrenotazione(context, a), icon: const Icon(Icons.edit, color: Color(0xFF32448C))),
+        if (a.status != AppointmentStatus.annullato)
+          IconButton(tooltip: 'Ricetta', onPressed: () => apriRicetta(context, a), icon: const Icon(Icons.medication_outlined, color: Color(0xFF32448C))),
         if (a.blocksRoom)
           IconButton(tooltip: 'Riprogramma', onPressed: () => apriRiprogramma(context, a, asStaff: true), icon: const Icon(Icons.event_repeat, color: Color(0xFF32448C))),
         if (a.blocksRoom && a.status == AppointmentStatus.inAttesa)
