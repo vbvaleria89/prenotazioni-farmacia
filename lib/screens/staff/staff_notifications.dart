@@ -2,9 +2,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../models/appointment.dart';
+import '../../models/recall.dart';
+import '../../models/settings.dart';
 import '../../services/booking_service.dart';
 import '../../theme/brand.dart';
 import 'ricetta_info.dart';
+import 'staff_recall.dart';
 
 String _fmt(DateTime? t) => t == null ? '' : '${t.day}/${t.month}/${t.year} ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
@@ -21,15 +24,31 @@ class UnreadBadge extends StatelessWidget {
         return StreamBuilder<List<Appointment>>(
           stream: bookingService.watchPendingRefunds(),
           builder: (context, snapR) {
-            final unread = (snapN.data ?? const []).where((x) => !x.readByUid(uid)).length;
-            final refunds = (snapR.data ?? const []).length;
-            final n = unread + refunds;
-            return Badge(isLabelVisible: n > 0, label: Text(n > 99 ? '99+' : '$n'), child: child);
+            return StreamBuilder<int>(
+              stream: watchRecallDaAvvisareCount(),
+              builder: (context, snapC) {
+                final unread = (snapN.data ?? const []).where((x) => !x.readByUid(uid)).length;
+                final refunds = (snapR.data ?? const []).length;
+                final recall = snapC.data ?? 0;
+                final n = unread + refunds + recall;
+                return Badge(isLabelVisible: n > 0, label: Text(n > 99 ? '99+' : '$n'), child: child);
+              },
+            );
           },
         );
       },
     );
   }
+}
+
+Stream<int> watchRecallDaAvvisareCount() {
+  return bookingService.settingsStream().asyncExpand((s) {
+    return bookingService.watchRecallAppointments().asyncExpand((appuntamenti) {
+      return bookingService.watchRecalls().map((recalls) {
+        return recallDaNotificare(recallVoci(appuntamenti, recalls, s.recallLeadDays, DateTime.now())).length;
+      });
+    });
+  });
 }
 
 class StaffNotificationsPage extends StatelessWidget {
@@ -39,7 +58,23 @@ class StaffNotificationsPage extends StatelessWidget {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     return Scaffold(
       appBar: const BrandAppBar(subtitle: 'Notifiche'),
-      body: StreamBuilder<List<Appointment>>(
+      body: StreamBuilder<PharmacySettings>(
+        stream: bookingService.settingsStream(),
+        builder: (context, snapS) {
+          final lead = snapS.data?.recallLeadDays ?? 15;
+          return StreamBuilder<List<Appointment>>(
+            stream: bookingService.watchRecallAppointments(),
+            builder: (context, snapRecallA) {
+              return StreamBuilder<List<RecallRecord>>(
+                stream: bookingService.watchRecalls(),
+                builder: (context, snapRecallR) {
+                  final daAvvisare = recallDaNotificare(recallVoci(
+                    snapRecallA.data ?? const [],
+                    snapRecallR.data ?? const [],
+                    lead,
+                    DateTime.now(),
+                  ));
+                  return StreamBuilder<List<Appointment>>(
         stream: bookingService.watchPendingRefunds(),
         builder: (context, snapR) {
           final refunds = snapR.data ?? const <Appointment>[];
@@ -49,9 +84,24 @@ class StaffNotificationsPage extends StatelessWidget {
               if (snap.hasError) return Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('Notifiche non disponibili: ${snap.error}')));
               if (!snap.hasData && !snapR.hasData) return const Center(child: CircularProgressIndicator());
               final list = snap.data ?? const <StaffNotification>[];
-              if (list.isEmpty && refunds.isEmpty) return const Center(child: Text('Nessuna notifica'));
+              if (list.isEmpty && refunds.isEmpty && daAvvisare.isEmpty) return const Center(child: Text('Nessuna notifica'));
               final unread = list.where((x) => !x.readByUid(uid)).toList();
               return ListView(padding: const EdgeInsets.all(16), children: [
+                if (daAvvisare.isNotEmpty) ...[
+                  const Text('Recall', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF8A6100))),
+                  const SizedBox(height: 8),
+                  for (final v in daAvvisare) Card(
+                    color: const Color(0xFFFFF1CC).withValues(alpha: 0.7),
+                    child: ListTile(
+                      leading: const Icon(Icons.assignment_return, color: Color(0xFF8A6100)),
+                      title: const Text('Notificare il recall al cliente', style: TextStyle(fontWeight: FontWeight.w800)),
+                      subtitle: Text('${v.appointment.customerName} · ${v.appointment.service.name}\nProssimo controllo ${_fmt(v.record?.prossimoControllo)}\nApri la scheda per il WhatsApp di remind'),
+                      isThreeLine: true,
+                      onTap: () => apriSchedaRecall(context, v.appointment.id),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 if (refunds.isNotEmpty) ...[
                   const Text('Da rimborsare', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF9B2C2C))),
                   const SizedBox(height: 8),
@@ -96,6 +146,12 @@ class StaffNotificationsPage extends StatelessWidget {
                     ),
                   ),
               ]);
+            },
+          );
+        },
+      );
+                },
+              );
             },
           );
         },

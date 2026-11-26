@@ -15,6 +15,7 @@ import 'staff_calendar.dart';
 import 'staff_list.dart';
 import 'staff_notices.dart';
 import 'staff_notifications.dart';
+import 'staff_recall.dart';
 import 'staff_today.dart';
 import '../../widgets/staff_idle_guard.dart';
 import '../../widgets/gcal_alert_banner.dart';
@@ -53,7 +54,8 @@ class _StaffHubState extends State<StaffHub> {
     final e = _updatedEmployee ?? widget.employee;
     final tiles = <_HubTile>[
       _HubTile('Oggi', 'Appuntamenti del giorno', Icons.today, Brand.green, () => StaffToday(employee: e)),
-      _HubTile('Notifiche', 'Nuove prenotazioni e rimborsi', Icons.notifications, Brand.green, StaffNotificationsPage.new, badge: true),
+      _HubTile('Notifiche', 'Prenotazioni, rimborsi e recall', Icons.notifications, Brand.green, StaffNotificationsPage.new, badge: true),
+      const _HubTile('Recall', 'Risultati e prossimo controllo', Icons.assignment_return, Brand.primary, RecallPage.new),
       _HubTile('Bacheca', e.isAdmin ? 'Qui aggiungi novità, promo, eventi' : 'Qui aggiungi novità ed eventi', Icons.campaign, Brand.primary, StaffNotices.new),
       const _HubTile('Calendario', 'Stanze e giorni', Icons.calendar_month, Brand.primary, StaffCalendar.new),
       const _HubTile('Elenco prenotazioni', 'Tabella con ricerca e azioni', Icons.view_list, Brand.primary, StaffBookingList.new),

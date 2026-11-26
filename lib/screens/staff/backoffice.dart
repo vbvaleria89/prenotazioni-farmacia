@@ -63,7 +63,9 @@ class _BackofficeState extends State<_BackofficeBody> {
   final _waMsg = TextEditingController();
   final _waStaff = TextEditingController();
   final _waHolter = TextEditingController();
+  final _waRecall = TextEditingController();
   int _open = 9, _close = 19;
+  int _recallDays = 15;
   bool _importingColors = false;
   bool _pushingColors = false;
 
@@ -81,8 +83,10 @@ class _BackofficeState extends State<_BackofficeBody> {
           _waMsg.text = s.whatsappClientMessage;
           _waStaff.text = s.whatsappStaffMessage;
           _waHolter.text = s.whatsappStaffHolterMessage;
+          _waRecall.text = s.whatsappRecallMessage;
           _open = s.openHour;
           _close = s.closeHour;
+          _recallDays = s.recallLeadDays;
         }));
   }
 
@@ -95,11 +99,25 @@ class _BackofficeState extends State<_BackofficeBody> {
           whatsapp: _wa.text.trim(),
           whatsappClientMessage: _waMsg.text.trim().isEmpty ? kDefaultWhatsappClientMessage : _waMsg.text.trim(),
           whatsappStaffMessage: _waStaff.text.trim().isEmpty ? kDefaultWhatsappStaffMessage : _waStaff.text.trim(),
-          whatsappStaffHolterMessage: _waHolter.text.trim().isEmpty ? kDefaultWhatsappStaffHolterMessage : _waHolter.text.trim()));
+          whatsappStaffHolterMessage: _waHolter.text.trim().isEmpty ? kDefaultWhatsappStaffHolterMessage : _waHolter.text.trim(),
+          recallLeadDays: _recallDays,
+          whatsappRecallMessage: _waRecall.text.trim().isEmpty ? kDefaultWhatsappRecallMessage : _waRecall.text.trim()));
       m.showSnackBar(const SnackBar(content: Text('Impostazioni salvate')));
     } catch (e) {
       m.showSnackBar(SnackBar(content: Text('Salvataggio non riuscito: $e')));
     }
+  }
+
+  Widget _hourRecall() {
+    final scelte = {...[7, 10, 15, 21, 30, 45, 60], _recallDays}.toList()..sort();
+    return Row(children: [
+      const Expanded(child: Text('Avviso recall (giorni prima)', style: TextStyle(fontSize: 16))),
+      DropdownButton<int>(
+        value: _recallDays,
+        items: [for (final g in scelte) DropdownMenuItem(value: g, child: Text('$g giorni'))],
+        onChanged: (v) => setState(() => _recallDays = v ?? 15),
+      ),
+    ]);
   }
 
   Widget _hour(String label, int v, ValueChanged<int> f) => Row(children: [
@@ -331,6 +349,15 @@ class _BackofficeState extends State<_BackofficeBody> {
                 decoration: const InputDecoration(
                   labelText: 'Promemoria WhatsApp Holter (applicazione e rimozione)',
                   helperText: 'In più: [RimozioneGiorno] [RimozioneOra]. Usato dal bottone della prima prenotazione.',
+                ),
+              ),
+              _hourRecall(),
+              TextField(
+                controller: _waRecall,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'WhatsApp di remind (Recall)',
+                  helperText: 'Segnaposto: [Nome] [Servizio] [ProssimoControllo]. Senza esito e senza note.',
                 ),
               ),
               const SizedBox(height: 16),

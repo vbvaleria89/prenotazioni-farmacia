@@ -72,6 +72,41 @@ String fillWhatsappStaffMessage({
   return t.replaceAll(RegExp(r'[ \t]{2,}'), ' ').replaceAll(RegExp(r'\s+,'), ',').trim();
 }
 
+/// Promemoria recall: niente esito e niente note cliniche.
+const kDefaultWhatsappRecallMessage =
+    'Buongiorno [Nome], le ricordiamo che è il momento di ripetere il controllo [Servizio]. '
+    'Il prossimo controllo è previsto per il [ProssimoControllo]. '
+    'Può passare in farmacia o prenotare un appuntamento. Grazie, Farmacia San Ciro.';
+
+/// Compila il remind del recall. [prossimo] vuoto toglie la frase sulla data se il testo è quello predefinito.
+String fillWhatsappRecallMessage({
+  String? template,
+  required String nome,
+  required String servizio,
+  DateTime? prossimo,
+}) {
+  final raw = (template ?? '').trim().isEmpty ? kDefaultWhatsappRecallMessage : template!.trim();
+  final chi = nome.trim();
+  var t = chi.isEmpty ? raw.replaceAll('[Nome]', '') : raw.replaceAll('[Nome]', chi);
+  t = t.replaceAll('[Servizio]', servizio.trim());
+  if (prossimo == null) {
+    t = t.replaceAll(RegExp(r'Il prossimo controllo è previsto per il \[ProssimoControllo\]\.\s*'), '');
+    t = t.replaceAll('[ProssimoControllo]', '');
+  } else {
+    t = t.replaceAll('[ProssimoControllo]', '${whatsappGiorno(prossimo)} ${prossimo.year}');
+  }
+  return t.replaceAll(RegExp(r'[ \t]{2,}'), ' ').replaceAll(RegExp(r'\s+,'), ',').trim();
+}
+
+/// Cifre internazionali di un cellulare cliente. Null se il numero non è usabile.
+String? whatsAppClientDigits(String? raw) {
+  var d = (raw ?? '').replaceAll(RegExp(r'\D'), '');
+  if (d.startsWith('00')) d = d.substring(2);
+  if (d.length == 10 && d.startsWith('3')) d = '39$d';
+  if (d.length < 11 || d.length > 15) return null;
+  return d;
+}
+
 /// Compila il template WhatsApp cliente: sostituisce `[Nome]` con [nomeCliente].
 /// Se il nome manca, rimuove «sono [Nome], » e lascia «Buongiorno, vorrei…».
 String fillWhatsappClientMessage(String template, String? nomeCliente) {

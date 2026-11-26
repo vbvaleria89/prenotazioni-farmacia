@@ -162,6 +162,27 @@ service cloud.firestore {
         && request.resource.data.start is timestamp;
       allow delete: if isAdmin();
     }
+    // Recall: esito, note e prossimo controllo. Solo dipendenti attivi. Il cliente non legge.
+    match /recalls/{id} {
+      function recallOk() {
+        return request.resource.data.keys().hasOnly(['esito', 'note', 'prossimoControllo', 'contattato', 'contattatoAt', 'contattatoDa', 'updatedAt', 'updatedBy'])
+          && request.resource.data.esito in ['', 'norma', 'ricontrollare', 'medico']
+          && request.resource.data.note is string
+          && request.resource.data.note.size() < 2000
+          && (request.resource.data.prossimoControllo == null || request.resource.data.prossimoControllo is timestamp)
+          && request.resource.data.contattato is bool
+          && (request.resource.data.contattatoAt == null || request.resource.data.contattatoAt is timestamp)
+          && request.resource.data.contattatoDa is string
+          && request.resource.data.contattatoDa.size() < 129
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.updatedAt == request.time
+          && exists(/databases/$(db)/documents/appointments/$(id))
+          && get(/databases/$(db)/documents/appointments/$(id)).data.status != 'annullato';
+      }
+      allow read: if isActiveEmployee();
+      allow create, update: if isActiveEmployee() && recallOk();
+      allow delete: if isAdmin();
+    }
     match /appointments/{id} {
       allow read: if isEmployee()
         || (signedIn() && resource.data.clienteUid == request.auth.uid)

@@ -13,6 +13,10 @@ class PharmacySettings {
   final String whatsappStaffMessage;
   /// Promemoria Holter con rimozione. In più: `[RimozioneGiorno]` `[RimozioneOra]`.
   final String whatsappStaffHolterMessage;
+  /// Giorni prima del prossimo controllo in cui compare la notifica recall.
+  final int recallLeadDays;
+  /// Remind WhatsApp del recall. Segnaposto: `[Nome]` `[Servizio]` `[ProssimoControllo]`.
+  final String whatsappRecallMessage;
   const PharmacySettings({
     this.openHour = 9,
     this.closeHour = 19,
@@ -24,6 +28,8 @@ class PharmacySettings {
     this.whatsappClientMessage = kDefaultWhatsappClientMessage,
     this.whatsappStaffMessage = kDefaultWhatsappStaffMessage,
     this.whatsappStaffHolterMessage = kDefaultWhatsappStaffHolterMessage,
+    this.recallLeadDays = 15,
+    this.whatsappRecallMessage = kDefaultWhatsappRecallMessage,
   });
 
   factory PharmacySettings.fromMap(Map<String, dynamic>? m) {
@@ -31,6 +37,8 @@ class PharmacySettings {
     final rawMsg = (m['whatsappClientMessage'] ?? '').toString().trim();
     final rawStaff = (m['whatsappStaffMessage'] ?? '').toString().trim();
     final rawHolter = (m['whatsappStaffHolterMessage'] ?? '').toString().trim();
+    final rawRecall = (m['whatsappRecallMessage'] ?? '').toString().trim();
+    final rawLead = (m['recallLeadDays'] as num?)?.toInt() ?? 15;
     return PharmacySettings(
       openHour: (m['openHour'] ?? 9) as int,
       closeHour: (m['closeHour'] ?? 19) as int,
@@ -42,6 +50,8 @@ class PharmacySettings {
       whatsappClientMessage: rawMsg.isEmpty ? kDefaultWhatsappClientMessage : rawMsg,
       whatsappStaffMessage: rawStaff.isEmpty ? kDefaultWhatsappStaffMessage : rawStaff,
       whatsappStaffHolterMessage: rawHolter.isEmpty ? kDefaultWhatsappStaffHolterMessage : rawHolter,
+      recallLeadDays: rawLead < 1 ? 1 : (rawLead > 90 ? 90 : rawLead),
+      whatsappRecallMessage: rawRecall.isEmpty ? kDefaultWhatsappRecallMessage : rawRecall,
     );
   }
 
@@ -62,6 +72,10 @@ class PharmacySettings {
         'whatsappStaffHolterMessage': whatsappStaffHolterMessage.trim().isEmpty
             ? kDefaultWhatsappStaffHolterMessage
             : whatsappStaffHolterMessage.trim(),
+        'recallLeadDays': recallLeadDays < 1 ? 1 : (recallLeadDays > 90 ? 90 : recallLeadDays),
+        'whatsappRecallMessage': whatsappRecallMessage.trim().isEmpty
+            ? kDefaultWhatsappRecallMessage
+            : whatsappRecallMessage.trim(),
         'updatedAt': FieldValue.serverTimestamp(),
       };
 }

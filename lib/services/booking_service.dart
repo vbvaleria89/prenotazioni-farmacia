@@ -7,6 +7,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import '../models/appointment.dart';
+import '../models/recall.dart';
 import '../models/holter_followup.dart';
 import '../models/fascia.dart';
 import '../models/codice_fiscale.dart';
@@ -164,6 +165,13 @@ class BookingService extends ChangeNotifier {
     if (!d.exists || d.data() == null) return null;
     return Appointment.fromDoc(d);
   }
+
+  /// Tutte le prenotazioni non annullate, senza segnare come effettuate quelle scadute.
+  Stream<List<Appointment>> watchRecallAppointments() => _appts.snapshots().map((q) {
+        final list = q.docs.map(Appointment.fromDoc).where((a) => a.status != AppointmentStatus.annullato).toList();
+        list.sort((a, b) => b.start.compareTo(a.start));
+        return list;
+      });
   Stream<PharmacySettings> settingsStream() => settingsRef.snapshots().map((d) => PharmacySettings.fromMap(d.data()));
   Future<void> saveSettings(PharmacySettings s) => settingsRef.set(s.toMap(), SetOptions(merge: true));
 
@@ -2005,6 +2013,79 @@ class BookingService extends ChangeNotifier {
     final s = ServiceType.fromDoc(d);
     ServiceType.registry[s.id] = s;
     return s.attivo ? s : null;
+  }
+
+  // ---- Recall (collection `recalls`, id = appointment id) ----
+  CollectionReference<Map<String, dynamic>> get _recalls => _db.collection('recalls');
+
+  RecallRecord _recallFromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
+    final m = d.data() ?? {};
+    DateTime? ts(dynamic v) => v is Timestamp ? v.toDate() : null;
+    final esito = (m['esito'] ?? '').toString();
+    return RecallRecord(
+      appointmentId: d.id,
+      esito: recallEsiti.contains(esito) ? esito : '',
+      note: (m['note'] ?? '').toString(),
+      prossimoControllo: ts(m['prossimoControllo']),
+      contattato: m['contattato'] == true,
+      contattatoAt: ts(m['contattatoAt']),
+      contattatoDa: (m['contattatoDa'] ?? '').toString(),
+    );
+  }
+
+  Stream<List<RecallRecord>> watchRecalls() => _recalls.snapshots().map((q) => q.docs.map(_recallFromDoc).toList());
+
+  Future<RecallRecord?> recallById(String id) async {
+    final d = await _recalls.doc(id).get();
+    if (!d.exists) return null;
+    return _recallFromDoc(d);
+  }
+
+  Future<void> saveRecall({
+    required String appointmentId,
+    required String esito,
+    required String note,
+    required DateTime? prossimoControllo,
+  }) async {
+    final prev = await recallById(appointmentId);
+    final giorno = prossimoControllo == null ? null : DateTime(prossimoControllo.year, prossimoControllo.month, prossimoControllo.day);
+    final dataCambiata = !stessoGiornoRecall(prev?.prossimoControllo, giorno);
+    final contattato = dataCambiata ? false : (prev?.contattato ?? false);
+    await _recalls.doc(appointmentId).set({
+      'esito': recallEsiti.contains(esito) ? esito : '',
+      'note': note.trim(),
+      'prossimoControllo': giorno == null ? null : Timestamp.fromDate(giorno),
+      'contattato': contattato,
+      'contattatoAt': contattato && prev?.contattatoAt != null ? Timestamp.fromDate(prev!.contattatoAt!) : null,
+      'contattatoDa': contattato ? (prev?.contattatoDa ?? '') : '',
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedBy': _auth.currentUser?.uid ?? '',
+    });
+  }
+
+  /// Unico passaggio ad Avvisato: lo preme lo staff, non il bottone WhatsApp.
+  Future<void> segnaRecallContattato(String appointmentId) async {
+    final prev = await recallById(appointmentId);
+    if (prev?.prossimoControllo == null) {
+      throw StateError('Inserisci prima la data del prossimo controllo');
+    }
+    await _recalls.doc(appointmentId).set({
+      'contattato': true,
+      'contattatoAt': FieldValue.serverTimestamp(),
+      'contattatoDa': _auth.currentUser?.uid ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedBy': _auth.currentUser?.uid ?? '',
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> riapriRecall(String appointmentId) async {
+    await _recalls.doc(appointmentId).set({
+      'contattato': false,
+      'contattatoAt': null,
+      'contattatoDa': '',
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedBy': _auth.currentUser?.uid ?? '',
+    }, SetOptions(merge: true));
   }
 
   // ---- Notifiche staff (collection `notifications`) ----
